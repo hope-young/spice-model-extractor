@@ -39,3 +39,8 @@ datademo/inspect/*.txt
 *.sub
 *.asy
 lt*.tmp
+src/styles/index.css
+node_modules/
+src-tauri/target/
+*.log
+dist/
