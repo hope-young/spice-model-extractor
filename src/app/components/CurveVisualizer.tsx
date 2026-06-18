@@ -181,6 +181,7 @@ export function CurveVisualizer() {
                   label={{ value: yAxisLabel(activeType), angle: -90, position: "insideLeft", offset: 8, style: { fontSize: 11, fill: "var(--muted)" } }}
                 />
                 <Tooltip
+                  shared={false}
                   contentStyle={{
                     background: "#fff",
                     border: "1px solid var(--border)",
@@ -206,24 +207,6 @@ export function CurveVisualizer() {
                     />
                   );
                 })}
-                {visibleCurves.some((c) => c.fit) &&
-                  visibleCurves
-                    .filter((c) => c.fit)
-                    .flatMap((c) =>
-                      generateMockData(c.type, true).map((d, i) => (
-                        <Line
-                          key={`${c.name}-fit-${i}`}
-                          data={[d]}
-                          type="monotone"
-                          dataKey="yfit"
-                          stroke={c.color}
-                          strokeWidth={1.5}
-                          strokeDasharray="5 3"
-                          dot={false}
-                          legendType="none"
-                        />
-                      ))
-                    )}
               </LineChart>
             </ResponsiveContainer>
           </Card>
