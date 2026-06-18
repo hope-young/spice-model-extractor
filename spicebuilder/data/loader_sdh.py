@@ -34,13 +34,13 @@ class DeviceInfo:
     test_date: str = ""
     test_temp: str = ""
     bvdss_rated_v: float = 0.0
-    rdson_max_mohm: float = 0.0
+    rdson_max_ohm: float = 0.0     # SI Ω（原始 2.1mΩ → 2.1e-3）
     id_rated_a: float = 0.0
     vth_typ_v: float = 0.0
     extra: dict = field(default_factory=dict)
 
     def __repr__(self):
-        return f"DeviceInfo({self.part_number}, BV={self.bvdss_rated_v}V, RDSon={self.rdson_max_mohm}mΩ)"
+        return f"DeviceInfo({self.part_number}, BV={self.bvdss_rated_v}V, RDSon={self.rdson_max_ohm*1e3:.2f}mΩ)"
 
 
 @dataclass
@@ -50,11 +50,11 @@ class SpiceKeyParams:
     vth_25c_v: float = 3.0
     dvth_dT_mv_per_c: float = -9.0  # 典型值
 
-    # On-Resistance
-    rdson_25c_10v_mohm: float = 1.85
-    rdson_25c_6v_mohm: float = 2.4
-    rdson_150c_10v_mohm: float = 3.9
-    rdson_temp_coeff: float = 1.86  # ratio
+    # On-Resistance (SI Ω)
+    rdson_25c_10v_ohm: float = 1.85e-3   # 1.85 mΩ
+    rdson_25c_6v_ohm: float = 2.4e-3     # 2.4 mΩ
+    rdson_150c_10v_ohm: float = 3.9e-3   # 3.9 mΩ
+    rdson_temp_coeff: float = 1.86  # ratio @150/25
 
     # Transconductance
     gfs_25c_s: float = 250.0
@@ -140,7 +140,7 @@ def load_device_info(wb) -> DeviceInfo:
         elif key == 'BVDSS Rated':
             info.bvdss_rated_v = _to_float(val) or 0.0
         elif key == 'RDSon max':
-            info.rdson_max_mohm = _to_float(val) or 0.0
+            info.rdson_max_ohm = _to_float(val) or 0.0
         elif key == 'ID Rated':
             info.id_rated_a = _to_float(val) or 0.0
         elif key == 'VGS(th) typ':
@@ -168,13 +168,13 @@ def load_spice_params(wb) -> SpiceKeyParams:
             p.vth_25c_v = val
         elif param == 'dVth/dT':
             p.dvth_dT_mv_per_c = val
-        # On-Resistance
+        # On-Resistance (SPICE_Params 里的数值是 mΩ，需 × 1e-3 转 SI Ω)
         elif 'RDSon @10Vgs, 25' in param:
-            p.rdson_25c_10v_mohm = val
+            p.rdson_25c_10v_ohm = val * 1e-3
         elif 'RDSon @6Vgs, 25' in param:
-            p.rdson_25c_6v_mohm = val
+            p.rdson_25c_6v_ohm = val * 1e-3
         elif 'RDSon @10Vgs, 150' in param:
-            p.rdson_150c_10v_mohm = val
+            p.rdson_150c_10v_ohm = val * 1e-3
         elif 'RDSon temp coeff' in param:
             p.rdson_temp_coeff = val
         # Transconductance
@@ -386,7 +386,7 @@ class SpiceDataSet:
         lines = [
             f"Device: {self.device_info.part_number}",
             f"  Package: {self.device_info.package}",
-            f"  BVdss: {self.device_info.bvdss_rated_v}V, RDSon: {self.device_info.rdson_max_mohm}mΩ",
+            f"  BVdss: {self.device_info.bvdss_rated_v}V, RDSon: {self.device_info.rdson_max_ohm*1e3:.2f}mΩ",
             f"  Vth(typ): {self.device_info.vth_typ_v}V",
             f"Curves:",
             f"  Id-Vg @5V:    {len(self.idvg_vds5)} points",
@@ -396,7 +396,7 @@ class SpiceDataSet:
             f"  Body Diode:   {len(self.body_diode)} points",
             f"Key SPICE params:",
             f"  Vth={self.key_params.vth_25c_v}V, dVth/dT={self.key_params.dvth_dT_mv_per_c}mV/°C",
-            f"  RDSon@25C,10V={self.key_params.rdson_25c_10v_mohm}mΩ, @150C={self.key_params.rdson_150c_10v_mohm}mΩ",
+            f"  RDSon@25C,10V={self.key_params.rdson_25c_10v_ohm*1e3:.2f}mΩ, @150C={self.key_params.rdson_150c_10v_ohm*1e3:.2f}mΩ",
             f"  Ciss/Coss/Crss@25V = {self.key_params.ciss_25v_pf:.0f}/{self.key_params.coss_25v_pf:.0f}/{self.key_params.crss_25v_pf:.0f} pF",
             f"  Qg@20V={self.key_params.qg_on_20v_nc}nC, Qgd={self.key_params.qgd_nc}nC, Vgs_pl={self.key_params.vgs_plateau_v}V",
         ]
