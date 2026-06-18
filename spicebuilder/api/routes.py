@@ -223,7 +223,8 @@ def get_model(project_id: str):
 
     model = project.model
     spec_map = {s.name: s for s in PARAM_SPECS}
-    fitted = model.is_fitted() if hasattr(model, 'is_fitted') else set()
+    # model.is_fitted(param) 接受参数名；获取所有已拟合参数用 _fitted 集合
+    fitted = getattr(model, '_fitted', set())
     initial = model.get_initial() if hasattr(model, 'get_initial') else {}
 
     params = []
