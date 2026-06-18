@@ -65,6 +65,7 @@ except ValueError:
 ax.set_xlabel('Vgs (V)')
 ax.set_ylabel('|Id| (μA)')
 ax.set_title('Id-Vg @ Vds=5V  [log]')
+ax.set_ylim(0.01, 1000)  # 固定 y 轴范围，4 个数量级
 ax.legend()
 ax.grid(True, alpha=0.3, which='both')
 
@@ -83,6 +84,7 @@ for vgs in [5.0, 5.5, 6.0, 6.5, 7.0, 8.0, 9.0, 10.0]:
 ax.set_xlabel('Vds (V)')
 ax.set_ylabel('Id (A)  [log]')
 ax.set_title('Id-Vd @ 25°C  [log]')
+ax.set_ylim(0.1, 500)  # 固定范围
 ax.legend(ncol=2, fontsize=8)
 ax.grid(True, alpha=0.3, which='both')
 ax.set_xlim(0, 12)
@@ -100,6 +102,7 @@ for cap, color, label in zip(['ciss', 'coss', 'crss'],
 ax.set_xlabel('Vds (V)')
 ax.set_ylabel('Capacitance (nF)  [log]')
 ax.set_title('C-V @ 1MHz  [log]')
+ax.set_ylim(0.01, 100)  # 固定范围
 ax.legend()
 ax.grid(True, alpha=0.3, which='both')
 ax.set_xlim(0, 25)
@@ -115,6 +118,7 @@ for temp, color in zip([-55, 25, 150], ['b', 'r', 'g']):
 ax.set_xlabel('|Vsd| (V)')
 ax.set_ylabel('|Is| (A)  [log]')
 ax.set_title('Body Diode If-Vf  [log]')
+ax.set_ylim(0.001, 1000)  # 固定范围，6 个数量级
 ax.legend()
 ax.grid(True, alpha=0.3, which='both')
 
@@ -224,7 +228,7 @@ try:
     fig.add_trace(go.Scatter(x=sim.ivar, y=np.abs(sim.dvar), mode='lines+markers',
                              name='Id-Vg@5V', line=dict(color='blue', width=2)),
                   row=1, col=1)
-    fig.update_yaxes(type='log', title_text='Id (A)', row=1, col=1)
+    fig.update_yaxes(type='log', title_text='Id (A)', range=[-2, 3], row=1, col=1)  # 1e-2 ~ 1e3
 
     # Id-Vd
     for vgs in [5.0, 6.0, 8.0, 10.0]:
@@ -236,7 +240,7 @@ try:
                               row=1, col=2)
         except ValueError:
             pass
-    fig.update_yaxes(type='log', title_text='Id (A)', row=1, col=2)
+    fig.update_yaxes(type='log', title_text='Id (A)', range=[-1, 3], row=1, col=2)  # 0.1 ~ 1000
     fig.update_xaxes(title_text='Vds (V)', row=1, col=2)
 
     # C-V
@@ -250,7 +254,7 @@ try:
                           row=2, col=1)
         except:
             pass
-    fig.update_yaxes(type='log', title_text='Capacitance (F)', row=2, col=1)
+    fig.update_yaxes(type='log', title_text='Capacitance (F)', range=[-14, -10], row=2, col=1)  # 1e-14 ~ 1e-10
     fig.update_xaxes(title_text='Vds (V)', row=2, col=1)
 
     # Body Diode
@@ -264,12 +268,12 @@ try:
                           row=2, col=2)
         except:
             pass
-    fig.update_yaxes(type='log', title_text='Is (A)', row=2, col=2)
+    fig.update_yaxes(type='log', title_text='Is (A)', range=[-2, 3], row=2, col=2)  # 1e-2 ~ 1e3
     fig.update_xaxes(title_text='|Vsd| (V)', row=2, col=2)
 
     fig.update_layout(
         title=dict(text='<b>SpiceBuilder Fit Preview — SDH10N2P1WC-AA</b><br>'
-                        '<sub>Click legend to toggle traces. Double-click y-axis to toggle log/linear.</sub>',
+                        '<sub>Click legend to toggle traces. Y-axis ranges are FIXED to keep curves visible when switching log/linear.</sub>',
                   x=0.5),
         height=800, width=1400,
         showlegend=True,
