@@ -3,10 +3,17 @@ plot_fit_results.py
 ===================
 画出拟合结果对比图（target 实测 vs fit 模型）。
 
-输出：
-  - datademo/fit_comparison.png    (matplotlib, 4 子图, 全部 log 适合看小信号)
-  - datademo/fit_comparison_lin.png (matplotlib, Id-Vd 改 linear)
-  - datademo/fit_comparison.html   (Plotly, 浏览器可交互切换 log/linear)
+5 个子图（Power MOSFET 完整建模）：
+  - Id-Vg  (默认 linear)
+  - Id-Vd  (默认 linear)
+  - C-V    (默认 log) - Ciss/Coss/Crss
+  - Qg     (默认 linear) - PLACEHOLDER if no data
+  - Isd    (默认 log) - 体二极管
+
+输出 3 个图：
+  - datademo/fit_comparison.png    (matplotlib, 5 subplots, 按上面 default scale)
+  - datademo/fit_comparison_all_log.png (matplotlib, 全部 log)
+  - datademo/fit_comparison.html   (Plotly, 浏览器可交互切换)
 """
 import sys
 sys.stdout.reconfigure(encoding='utf-8')
@@ -47,29 +54,27 @@ for i in range(30):
 # 加载原始数据
 ds = load_sdh_excel('datademo/SDH10N2P1WC-AA_SPICE_Data.xlsx')
 
-# === 3. 画 4 张子图 (log 版) ===
-fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-fig.suptitle('SpiceBuilder Fit Result (Log-Scale) — SDH10N2P1WC-AA (100V SGT MOSFET)',
+# 是否有 Qg 数据
+HAS_QG = False
+print(f"Qg data: {'available' if HAS_QG else 'NOT available (placeholder)'}")
+
+# === 3. 画 5 张子图 (default scale) ===
+fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+fig.suptitle('SpiceBuilder Fit Result (Default Scales) — SDH10N2P1WC-AA (100V SGT MOSFET)',
              fontsize=14, fontweight='bold')
 
-# === Id-Vg @5V (log) ===
+# (1) Id-Vg @5V — linear
 ax = axes[0, 0]
 sim = SimData.from_idvg(ds.idvg_vds5, temperature_c=25, vds_v=5.0)
-ax.semilogy(sim.ivar, np.abs(sim.dvar)*1e6, 'b-', label='Target (25°C)', linewidth=2)
-try:
-    sim150 = SimData.from_idvg(ds.idvg_vds5, temperature_c=150, vds_v=5.0)
-    if sim150.n_points > 0:
-        ax.semilogy(sim150.ivar, np.abs(sim150.dvar)*1e6, 'r--', label='Target (150°C)', linewidth=2)
-except ValueError:
-    pass
+ax.plot(sim.ivar, sim.dvar * 1e6, 'b-', label='Target (25°C)', linewidth=2)
 ax.set_xlabel('Vgs (V)')
-ax.set_ylabel('|Id| (μA)')
-ax.set_title('Id-Vg @ Vds=5V  [log]')
-ax.set_ylim(0.01, 1000)  # 固定 y 轴范围，4 个数量级
+ax.set_ylabel('Id (μA)  [linear]')
+ax.set_title('Id-Vg @ Vds=5V  [linear]')
+ax.set_ylim(-10, 380)
 ax.legend()
-ax.grid(True, alpha=0.3, which='both')
+ax.grid(True, alpha=0.3)
 
-# === Id-Vd (log y) ===
+# (2) Id-Vd @25°C — linear
 ax = axes[0, 1]
 vgs_colors = {5.0: 'b', 5.5: 'r', 6.0: 'g', 6.5: 'm', 7.0: 'c', 8.0: 'orange', 9.0: 'purple', 10.0: 'brown'}
 for vgs in [5.0, 5.5, 6.0, 6.5, 7.0, 8.0, 9.0, 10.0]:
@@ -77,23 +82,21 @@ for vgs in [5.0, 5.5, 6.0, 6.5, 7.0, 8.0, 9.0, 10.0]:
         sim = SimData.from_idvd(ds.idvd, vgs_v=vgs, temperature_c=25)
         if sim.n_points > 0:
             color = vgs_colors.get(vgs, 'k')
-            ax.semilogy(sim.ivar, sim.dvar, color=color, label=f'Vgs={vgs}V',
-                        linewidth=1.5, marker='o', markersize=3)
+            ax.plot(sim.ivar, sim.dvar, color=color, label=f'Vgs={vgs}V', linewidth=1.5, marker='o', markersize=3)
     except ValueError:
         pass
 ax.set_xlabel('Vds (V)')
-ax.set_ylabel('Id (A)  [log]')
-ax.set_title('Id-Vd @ 25°C  [log]')
-ax.set_ylim(0.1, 500)  # 固定范围
-ax.legend(ncol=2, fontsize=8)
-ax.grid(True, alpha=0.3, which='both')
+ax.set_ylabel('Id (A)  [linear]')
+ax.set_title('Id-Vd @ 25°C  [linear]')
 ax.set_xlim(0, 12)
+ax.set_ylim(-2, 60)
+ax.legend(ncol=2, fontsize=8)
+ax.grid(True, alpha=0.3)
 
-# === C-V (log) ===
-ax = axes[1, 0]
+# (3) C-V @1MHz — log
+ax = axes[0, 2]
 for cap, color, label in zip(['ciss', 'coss', 'crss'],
-                              ['b', 'r', 'g'],
-                              ['Ciss', 'Coss', 'Crss']):
+                              ['b', 'r', 'g'], ['Ciss', 'Coss', 'Crss']):
     try:
         sim = SimData.from_cv(ds.cv_vds, cap_type=cap)
         ax.semilogy(sim.ivar, sim.dvar/1e3, color=color, label=label, linewidth=2)
@@ -102,133 +105,205 @@ for cap, color, label in zip(['ciss', 'coss', 'crss'],
 ax.set_xlabel('Vds (V)')
 ax.set_ylabel('Capacitance (nF)  [log]')
 ax.set_title('C-V @ 1MHz  [log]')
-ax.set_ylim(0.01, 100)  # 固定范围
+ax.set_ylim(0.01, 100)
 ax.legend()
 ax.grid(True, alpha=0.3, which='both')
 ax.set_xlim(0, 25)
 
-# === Body Diode (log) ===
+# (4) Qg — linear PLACEHOLDER
+ax = axes[1, 0]
+if HAS_QG:
+    # 实测数据会放这里
+    pass
+else:
+    # 灰色 placeholder
+    ax.text(0.5, 0.5,
+            'Qg data NOT provided\n\nOriginal Excel had VGS-Qg sheet\nbut it was removed during cleaning\n\nAdd VGS-Qg data to enable this subplot',
+            transform=ax.transAxes, ha='center', va='center',
+            fontsize=12, color='gray',
+            bbox=dict(boxstyle='round,pad=0.5', facecolor='#f5f5f5', edgecolor='gray'))
+ax.set_xlabel('Vgs (V)')
+ax.set_ylabel('Qg (nC)  [linear]')
+ax.set_title('Qg (Vgs-Qg)  [linear]  PLACEHOLDER')
+ax.set_xlim(0, 10)
+ax.set_ylim(0, 200)
+ax.grid(True, alpha=0.3)
+
+# (5) Body Diode — log (修 ylim 用 log range)
 ax = axes[1, 1]
 for temp, color in zip([-55, 25, 150], ['b', 'r', 'g']):
     try:
         sim = SimData.from_body_diode(ds.body_diode, temperature_c=temp)
-        ax.semilogy(sim.ivar, sim.dvar, color=color, label=f'T={temp}°C', linewidth=1.5)
+        # 过滤 0 值（log 不能有 0）
+        mask = sim.dvar > 0
+        if mask.any():
+            ax.semilogy(sim.ivar[mask], sim.dvar[mask], color=color, label=f'T={temp}°C', linewidth=1.5)
     except:
         pass
 ax.set_xlabel('|Vsd| (V)')
 ax.set_ylabel('|Is| (A)  [log]')
 ax.set_title('Body Diode If-Vf  [log]')
-ax.set_ylim(0.001, 1000)  # 固定范围，6 个数量级
+ax.set_ylim(0.01, 500)  # 固定 4-5 个数量级
 ax.legend()
 ax.grid(True, alpha=0.3, which='both')
 
+# (6) Device Info 卡片
+ax = axes[1, 2]
 info = ds.device_info
-fig.text(0.5, 0.01,
-         f"Part: {info.part_number}  |  Package: {info.package}  |  "
-         f"BVdss: {info.bvdss_rated_v}V  |  RDSon max: {info.rdson_max_ohm*1e3:.2f} mΩ  |  "
-         f"Vth(typ): {info.vth_typ_v}V",
+key = ds.key_params
+ax.axis('off')
+card_text = (
+    f"═══ Device ═══\n"
+    f"Part:    {info.part_number}\n"
+    f"Package: {info.package}\n"
+    f"BVdss:   {info.bvdss_rated_v} V\n"
+    f"RDSon:   {info.rdson_max_ohm*1e3:.2f} mΩ\n"
+    f"Vth(typ):{info.vth_typ_v} V\n"
+    f"\n═══ Key SPICE Params ═══\n"
+    f"Vth@25C:  {key.vth_25c_v} V\n"
+    f"dVth/dT:  {key.dvth_dT_mv_per_c} mV/°C\n"
+    f"RDSon@25C,10V: {key.rdson_25c_10v_ohm*1e3:.2f} mΩ\n"
+    f"RDSon@150C:    {key.rdson_150c_10v_ohm*1e3:.2f} mΩ\n"
+    f"Ciss@25V: {key.ciss_25v_pf:.0f} pF\n"
+    f"Coss@25V: {key.coss_25v_pf:.0f} pF\n"
+    f"Crss@25V: {key.crss_25v_pf:.0f} pF\n"
+    f"Qg@20V:   {key.qg_on_20v_nc:.1f} nC\n"
+    f"Qgd:      {key.qgd_nc:.1f} nC"
+)
+ax.text(0.05, 0.95, card_text, transform=ax.transAxes, ha='left', va='top',
+        family='monospace', fontsize=10,
+        bbox=dict(boxstyle='round,pad=0.5', facecolor='#fafafa', edgecolor='#e5e5e5'))
+ax.set_title('Device Info')
+
+info = ds.device_info
+fig.text(0.5, 0.005,
+         f"Part: {info.part_number}  |  Default scales: IdVg=linear, IdVd=linear, Cap=log, Qg=linear (placeholder), Isd=log",
          ha='center', fontsize=10, color='gray')
 
-plt.tight_layout(rect=[0, 0.03, 1, 0.97])
+plt.tight_layout(rect=[0, 0.02, 1, 0.97])
 out_path = Path('datademo/fit_comparison.png')
 plt.savefig(out_path, dpi=120, bbox_inches='tight')
 print(f"Saved: {out_path} ({out_path.stat().st_size//1024} KB)")
 plt.close()
 
-# === 4. 画 4 张子图 (linear 版) ===
-fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-fig.suptitle('SpiceBuilder Fit Result (Linear-Scale) — SDH10N2P1WC-AA',
+# === 4. 画全部 log 版 ===
+fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+fig.suptitle('SpiceBuilder Fit Result (All-Log) — SDH10N2P1WC-AA',
              fontsize=14, fontweight='bold')
 
-# Id-Vg (linear)
+# Id-Vg log
 ax = axes[0, 0]
 sim = SimData.from_idvg(ds.idvg_vds5, temperature_c=25, vds_v=5.0)
-ax.plot(sim.ivar, sim.dvar, 'b-', label='Target (25°C)', linewidth=2)
+mask = sim.dvar > 0
+ax.semilogy(sim.ivar[mask], sim.dvar[mask] * 1e6, 'b-', label='Target (25°C)', linewidth=2)
 ax.set_xlabel('Vgs (V)')
-ax.set_ylabel('Id (A)')
-ax.set_title('Id-Vg @ Vds=5V  [linear]')
+ax.set_ylabel('|Id| (μA)  [log]')
+ax.set_title('Id-Vg @ Vds=5V  [log]')
+ax.set_ylim(0.01, 1000)
 ax.legend()
-ax.grid(True, alpha=0.3)
+ax.grid(True, alpha=0.3, which='both')
 
-# Id-Vd (linear)
+# Id-Vd log
 ax = axes[0, 1]
 for vgs in [5.0, 5.5, 6.0, 6.5, 7.0, 8.0, 9.0, 10.0]:
     try:
         sim = SimData.from_idvd(ds.idvd, vgs_v=vgs, temperature_c=25)
         if sim.n_points > 0:
             color = vgs_colors.get(vgs, 'k')
-            ax.plot(sim.ivar, sim.dvar, color=color, label=f'Vgs={vgs}V', linewidth=1.5)
+            ax.semilogy(sim.ivar, sim.dvar, color=color, label=f'Vgs={vgs}V', linewidth=1.5, marker='o', markersize=3)
     except ValueError:
         pass
 ax.set_xlabel('Vds (V)')
-ax.set_ylabel('Id (A)  [linear]')
-ax.set_title('Id-Vd @ 25°C  [linear]')
-ax.legend(ncol=2, fontsize=8)
-ax.grid(True, alpha=0.3)
+ax.set_ylabel('Id (A)  [log]')
+ax.set_title('Id-Vd @ 25°C  [log]')
 ax.set_xlim(0, 12)
-ax.set_ylim(0, 60)
+ax.set_ylim(0.1, 500)
+ax.legend(ncol=2, fontsize=8)
+ax.grid(True, alpha=0.3, which='both')
 
-# C-V (linear)
-ax = axes[1, 0]
+# C-V log (already)
+ax = axes[0, 2]
 for cap, color, label in zip(['ciss', 'coss', 'crss'],
                               ['b', 'r', 'g'], ['Ciss', 'Coss', 'Crss']):
     try:
         sim = SimData.from_cv(ds.cv_vds, cap_type=cap)
-        ax.plot(sim.ivar, sim.dvar/1e3, color=color, label=label, linewidth=2)
+        ax.semilogy(sim.ivar, sim.dvar/1e3, color=color, label=label, linewidth=2)
     except:
         pass
 ax.set_xlabel('Vds (V)')
-ax.set_ylabel('Capacitance (nF)')
-ax.set_title('C-V @ 1MHz  [linear]')
+ax.set_ylabel('Capacitance (nF)  [log]')
+ax.set_title('C-V @ 1MHz  [log]')
+ax.set_ylim(0.01, 100)
 ax.legend()
-ax.grid(True, alpha=0.3)
+ax.grid(True, alpha=0.3, which='both')
 ax.set_xlim(0, 25)
 
-# Body Diode (linear)
+# Qg log placeholder
+ax = axes[1, 0]
+ax.text(0.5, 0.5,
+        'Qg data NOT provided\n\n(placeholder)',
+        transform=ax.transAxes, ha='center', va='center',
+        fontsize=12, color='gray',
+        bbox=dict(boxstyle='round,pad=0.5', facecolor='#f5f5f5', edgecolor='gray'))
+ax.set_xlabel('Vgs (V)')
+ax.set_ylabel('Qg (nC)  [log]')
+ax.set_title('Qg  [log]  PLACEHOLDER')
+
+# Isd log
 ax = axes[1, 1]
 for temp, color in zip([-55, 25, 150], ['b', 'r', 'g']):
     try:
         sim = SimData.from_body_diode(ds.body_diode, temperature_c=temp)
-        ax.plot(sim.ivar, sim.dvar, color=color, label=f'T={temp}°C', linewidth=1.5)
+        mask = sim.dvar > 0
+        if mask.any():
+            ax.semilogy(sim.ivar[mask], sim.dvar[mask], color=color, label=f'T={temp}°C', linewidth=1.5)
     except:
         pass
 ax.set_xlabel('|Vsd| (V)')
-ax.set_ylabel('|Is| (A)')
-ax.set_title('Body Diode If-Vf  [linear]')
+ax.set_ylabel('|Is| (A)  [log]')
+ax.set_title('Body Diode If-Vf  [log]')
+ax.set_ylim(0.01, 500)
 ax.legend()
-ax.grid(True, alpha=0.3)
+ax.grid(True, alpha=0.3, which='both')
 
-info = ds.device_info
-fig.text(0.5, 0.01,
-         f"Part: {info.part_number}  |  All 4 subplots in linear scale for comparison",
-         ha='center', fontsize=10, color='gray')
+# Device Info
+ax = axes[1, 2]
+ax.axis('off')
+ax.text(0.05, 0.95, card_text, transform=ax.transAxes, ha='left', va='top',
+        family='monospace', fontsize=10,
+        bbox=dict(boxstyle='round,pad=0.5', facecolor='#fafafa', edgecolor='#e5e5e5'))
+ax.set_title('Device Info')
 
-plt.tight_layout(rect=[0, 0.03, 1, 0.97])
-out_lin = Path('datademo/fit_comparison_lin.png')
-plt.savefig(out_lin, dpi=120, bbox_inches='tight')
-print(f"Saved: {out_lin} ({out_lin.stat().st_size//1024} KB)")
+plt.tight_layout(rect=[0, 0.02, 1, 0.97])
+out_log = Path('datademo/fit_comparison_all_log.png')
+plt.savefig(out_log, dpi=120, bbox_inches='tight')
+print(f"Saved: {out_log} ({out_log.stat().st_size//1024} KB)")
 plt.close()
 
-# === 5. 交互式 HTML (Plotly, 浏览器可点 log/linear 切换) ===
+# === 5. 交互式 HTML (Plotly) ===
 try:
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
 
     fig = make_subplots(
-        rows=2, cols=2,
-        subplot_titles=('Id-Vg @ Vds=5V',
-                        'Id-Vd @ 25°C',
-                        'C-V @ 1MHz',
-                        'Body Diode If-Vf'),
-        vertical_spacing=0.12, horizontal_spacing=0.10
+        rows=2, cols=3,
+        subplot_titles=('Id-Vg @ Vds=5V  [default: linear]',
+                        'Id-Vd @ 25°C  [default: linear]',
+                        'C-V @ 1MHz  [default: log]',
+                        'Qg (Vgs-Qg)  [default: linear, PLACEHOLDER]',
+                        'Body Diode If-Vf  [default: log]',
+                        'Device Info'),
+        vertical_spacing=0.12, horizontal_spacing=0.08,
+        specs=[[{}, {}, {}], [{}, {}, {"type": "domain"}]]  # last cell non-xy
     )
 
     # Id-Vg
     sim = SimData.from_idvg(ds.idvg_vds5, temperature_c=25, vds_v=5.0)
-    fig.add_trace(go.Scatter(x=sim.ivar, y=np.abs(sim.dvar), mode='lines+markers',
+    fig.add_trace(go.Scatter(x=sim.ivar, y=sim.dvar, mode='lines+markers',
                              name='Id-Vg@5V', line=dict(color='blue', width=2)),
                   row=1, col=1)
-    fig.update_yaxes(type='log', title_text='Id (A)', range=[-2, 3], row=1, col=1)  # 1e-2 ~ 1e3
+    fig.update_yaxes(type='linear', title_text='Id (A)', row=1, col=1)
+    fig.update_xaxes(title_text='Vgs (V)', row=1, col=1)
 
     # Id-Vd
     for vgs in [5.0, 6.0, 8.0, 10.0]:
@@ -240,7 +315,7 @@ try:
                               row=1, col=2)
         except ValueError:
             pass
-    fig.update_yaxes(type='log', title_text='Id (A)', range=[-1, 3], row=1, col=2)  # 0.1 ~ 1000
+    fig.update_yaxes(type='linear', title_text='Id (A)', range=[-5, 60], row=1, col=2)
     fig.update_xaxes(title_text='Vds (V)', row=1, col=2)
 
     # C-V
@@ -251,31 +326,46 @@ try:
             sim = SimData.from_cv(ds.cv_vds, cap_type=cap)
             fig.add_trace(go.Scatter(x=sim.ivar, y=sim.dvar, mode='lines+markers',
                                      name=name, line=dict(color=color, width=2)),
-                          row=2, col=1)
+                          row=1, col=3)
         except:
             pass
-    fig.update_yaxes(type='log', title_text='Capacitance (F)', range=[-14, -10], row=2, col=1)  # 1e-14 ~ 1e-10
-    fig.update_xaxes(title_text='Vds (V)', row=2, col=1)
+    fig.update_yaxes(type='log', title_text='Capacitance (F)', range=[-14, -10], row=1, col=3)
+    fig.update_xaxes(title_text='Vds (V)', row=1, col=3)
 
-    # Body Diode
+    # Qg placeholder
+    fig.add_annotation(text="Qg data NOT provided<br>(placeholder)", xref="x4 domain", yref="y4",
+                        x=0.5, y=0.5, showarrow=False, font=dict(size=14, color='gray'),
+                        bgcolor='#f5f5f5', bordercolor='gray', borderwidth=2)
+    fig.update_xaxes(title_text='Vgs (V)', row=2, col=1)
+    fig.update_yaxes(title_text='Qg (nC)', type='linear', range=[0, 200], row=2, col=1)
+
+    # Isd
     for temp, color, name in zip([-55, 25, 150],
                                   ['blue', 'red', 'green'],
                                   ['T=-55°C', 'T=25°C', 'T=150°C']):
         try:
             sim = SimData.from_body_diode(ds.body_diode, temperature_c=temp)
-            fig.add_trace(go.Scatter(x=sim.ivar, y=sim.dvar, mode='lines+markers',
-                                     name=name, line=dict(color=color, width=1.5)),
-                          row=2, col=2)
+            mask = sim.dvar > 0
+            if mask.any():
+                fig.add_trace(go.Scatter(x=sim.ivar[mask], y=sim.dvar[mask], mode='lines+markers',
+                                         name=name, line=dict(color=color, width=1.5)),
+                              row=2, col=2)
         except:
             pass
-    fig.update_yaxes(type='log', title_text='Is (A)', range=[-2, 3], row=2, col=2)  # 1e-2 ~ 1e3
+    fig.update_yaxes(type='log', title_text='Is (A)', range=[-2, 2.7], row=2, col=2)
     fig.update_xaxes(title_text='|Vsd| (V)', row=2, col=2)
 
+    # Device Info 卡片
+    fig.add_annotation(text=card_text, xref="paper", yref="y5",
+                        x=0.83, y=0.30, showarrow=False, font=dict(size=10, family='monospace'),
+                        bgcolor='#fafafa', bordercolor='#e5e5e5', borderwidth=1,
+                        align='left')
+
     fig.update_layout(
-        title=dict(text='<b>SpiceBuilder Fit Preview — SDH10N2P1WC-AA</b><br>'
-                        '<sub>Click legend to toggle traces. Y-axis ranges are FIXED to keep curves visible when switching log/linear.</sub>',
+        title=dict(text='<b>SpiceBuilder Fit Preview — SDH10N2P1WC-AA (5 subplots)</b><br>'
+                        '<sub>Default scales: IdVg/IdVd/Qg=linear, Cap/Isd=log. Double-click any y-axis to toggle.</sub>',
                   x=0.5),
-        height=800, width=1400,
+        height=850, width=1500,
         showlegend=True,
         template='plotly_white',
     )
@@ -283,6 +373,8 @@ try:
     out_html = Path('datademo/fit_comparison.html')
     fig.write_html(str(out_html), include_plotlyjs='cdn')
     print(f"Saved: {out_html} ({out_html.stat().st_size//1024} KB)")
-    print("       (双击在浏览器打开，可点击切换 log/linear)")
+    print("       (双击在浏览器打开，5 subplots，双击 y 轴切 log/linear)")
 except Exception as e:
     print(f"Plotly HTML skipped: {e}")
+    import traceback
+    traceback.print_exc()
