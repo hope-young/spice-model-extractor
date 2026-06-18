@@ -258,11 +258,18 @@ class LTspiceBackend:
             return {}
 
         # 解析数据
-        # 每个数据点占 n_vars 行:  "<index>  val0  val1  ...  valN"
+        # LTspice ASCII .raw 格式: 每行一个值
+        #   0  vals[0]
+        #      vals[1]
+        #      vals[2]
+        #      ... vals[n_vars-1]
+        #   1  vals[0]
+        #      ...
         result = {name: {"ivar": [], "dvar": []} for name in var_names[1:]}
-        result["time"] = {"ivar": [], "dvar": []}  # 特殊：ivar 是 time
+        result["time"] = {"ivar": [], "dvar": []}  # 兼容旧调用
 
         cur_idx = -1
+        cur_vals = []
         for line in lines[data_start:]:
             if not line.strip():
                 continue
@@ -270,21 +277,44 @@ class LTspiceBackend:
             if not parts:
                 continue
             try:
+                # 检查是否是新的数据点（第一个值是 index）
                 idx = int(parts[0])
+                # 提交上一个数据点
+                if cur_vals and idx == cur_idx + 1:
+                    # cur_vals 长度应等于 n_vars，可能少于（不完整）
+                    if len(cur_vals) == n_vars:
+                        # 第一个 var 是 ivar
+                        ivar_val = cur_vals[0]
+                        for v_idx, vname in enumerate(var_names[1:], start=1):
+                            if v_idx < len(cur_vals):
+                                result[vname]["dvar"].append(cur_vals[v_idx])
+                        for n in result:
+                            result[n]["ivar"].append(ivar_val)
+                cur_idx = idx
+                cur_vals = []
+                # 这一行也可能包含第一个值
+                if len(parts) > 1:
+                    for p in parts[1:]:
+                        try:
+                            cur_vals.append(float(p))
+                        except ValueError:
+                            pass
             except ValueError:
-                continue
-            if idx != cur_idx + 1:
-                continue
-            cur_idx = idx
-            vals = [float(v) for v in parts[1:n_vars + 1]]
-            for k, vname in enumerate(var_names):
-                if k == 0:
-                    # 第一列是独立变量（time / frequency）
-                    # 存到所有 trace 的 ivar
-                    for n in result:
-                        result[n]["ivar"].append(vals[k])
-                else:
-                    result[vname]["dvar"].append(vals[k])
+                # 不是 index 行，是数据行
+                for p in parts:
+                    try:
+                        cur_vals.append(float(p))
+                    except ValueError:
+                        pass
+
+        # 处理最后一个数据点
+        if cur_vals and len(cur_vals) == n_vars:
+            ivar_val = cur_vals[0]
+            for v_idx, vname in enumerate(var_names[1:], start=1):
+                if v_idx < len(cur_vals):
+                    result[vname]["dvar"].append(cur_vals[v_idx])
+            for n in result:
+                result[n]["ivar"].append(ivar_val)
 
         return result
 

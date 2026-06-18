@@ -269,9 +269,11 @@ def export_project(project_id: str, req: ExportRequest):
         if req.format.upper() == "A":
             path = exporter.export_bsim3(project.model, req.output_path)
         else:
+            # 使用短名作为 subckt_name，方便调用
+            short_name = "SDH10N2P1" if "SDH10N2P1" in project.name else project.name
             path = exporter.export_subckt(
                 project.model, req.output_path,
-                subckt_name=project.name,
+                subckt_name=short_name,
                 rg_ohm=req.rg_ohm,
                 rd_ohm=req.rd_ohm,
                 rs_ohm=req.rs_ohm,
