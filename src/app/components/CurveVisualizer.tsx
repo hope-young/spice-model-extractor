@@ -1,312 +1,302 @@
-// CurveVisualizer.tsx - 曲线可视化器（核心屏幕）
-import { useState, useMemo } from "react";
+// CurveVisualizer.tsx - 5-subplot 曲线可视化器 (真实 API)
+import { useState, useEffect } from "react";
 import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
-  ResponsiveContainer, ReferenceLine,
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
+  ResponsiveContainer,
 } from "recharts";
-import { TrendingUp, Search, Download, Eye, EyeOff } from "lucide-react";
-import { Card, CardHeader, Button, Badge, Input, Select } from "./ui";
+import {
+  TrendingUp, RefreshCw, Power, FileText, AlertCircle,
+} from "lucide-react";
+import { Card, CardHeader, Button, Badge } from "./ui";
+import { useApp } from "../../lib/store";
+import * as api from "../../lib/api";
 
-type CurveType = "idvg" | "idvd" | "cv" | "qg" | "diode";
+const C = {
+  bg: "#ffffff", surface: "#fafafa", border: "#e5e5e5",
+  text: "#2c2c2c", muted: "#6b7280",
+  primary: "#0d99ff", success: "#14ae5c", warning: "#ffcd29", error: "#f24822",
+  accent: "#e6f4ff", hover: "#f5f5f5",
+};
 
-interface Curve {
-  name: string;
-  type: CurveType;
+// 5 个曲线 subplot 定义
+interface SubplotDef {
+  id: string;
+  title: string;
+  curveType: string;
+  yScale: "log" | "linear";
+  xLabel: string;
+  yLabel: string;
   color: string;
-  visible: boolean;
-  fit?: boolean;
 }
 
-const allCurves: Curve[] = [
-  { name: "Id-Vg @Vds=5V, T=25°C", type: "idvg", color: "#0d99ff", visible: true, fit: true },
-  { name: "Id-Vg @Vds=5V, T=150°C", type: "idvg", color: "#f24822", visible: true },
-  { name: "Id-Vg @Vds=0.5V, T=25°C", type: "idvg", color: "#14ae5c", visible: false },
-  { name: "Id-Vd @Vgs=10V", type: "idvd", color: "#0d99ff", visible: true, fit: true },
-  { name: "Id-Vd @Vgs=8V", type: "idvd", color: "#9b59b6", visible: true },
-  { name: "Coss @25V", type: "cv", color: "#0d99ff", visible: true, fit: true },
-  { name: "Crss @25V", type: "cv", color: "#f24822", visible: true },
-  { name: "Qg @20V", type: "qg", color: "#0d99ff", visible: true },
-  { name: "Body Diode @25°C", type: "diode", color: "#14ae5c", visible: false },
+const SUBPLOTS: SubplotDef[] = [
+  { id: "idvg5",   title: "Id-Vg @ Vds=5V",     curveType: "idvg_vds5",  yScale: "log",    xLabel: "Vgs (V)", yLabel: "Id (A) [log]",    color: "#0d99ff" },
+  { id: "idvg05",  title: "Id-Vg @ Vds=0.5V",   curveType: "idvg_vds05", yScale: "log",    xLabel: "Vgs (V)", yLabel: "Id (A) [log]",    color: "#14ae5c" },
+  { id: "idvd",    title: "Id-Vd",              curveType: "idvd",       yScale: "linear", xLabel: "Vds (V)", yLabel: "Id (A) [linear]", color: "#9b59b6" },
+  { id: "cv",      title: "C-V @ 1MHz",         curveType: "cv_vds",     yScale: "log",    xLabel: "Vds (V)", yLabel: "Cap (pF) [log]",  color: "#f24822" },
+  { id: "diode",   title: "Body Diode",         curveType: "body_diode", yScale: "log",    xLabel: "Vsd (V)", yLabel: "Is (A) [log]",    color: "#ff9f1c" },
 ];
 
-// 生成 mock 数据
-function generateMockData(type: CurveType, fit: boolean = false) {
-  const points: { x: number; y: number; yfit?: number }[] = [];
-  let n = 50;
-  let xMax = 5;
-  if (type === "idvg") { n = 60; xMax = 5.5; }
-  else if (type === "idvd") { n = 40; xMax = 10; }
-  else if (type === "cv") { n = 30; xMax = 50; }
-  else if (type === "qg") { n = 40; xMax = 10; }
-  else if (type === "diode") { n = 30; xMax = 1.2; }
-
-  for (let i = 0; i < n; i++) {
-    const x = (i / (n - 1)) * xMax;
-    let y = 0;
-    if (type === "idvg") {
-      // MOSFET Id-Vg: subthreshold + linear
-      const vth = 3.0;
-      if (x < vth) y = 1e-7 * Math.exp((x - vth) * 8);
-      else y = 10 * (x - vth) * (x - vth) + 0.5;
-    } else if (type === "idvd") {
-      // Id-Vd: linear then saturation
-      y = 100 * (1 - Math.exp(-x / 2)) + (x > 1 ? (x - 1) * 10 : 0);
-    } else if (type === "cv") {
-      // C-V: decrease with Vds
-      y = 1e4 / Math.sqrt(x + 0.5) + 100;
-    } else if (type === "qg") {
-      // Qg: monotonic increasing
-      y = 20 * x + 5;
-    } else if (type === "diode") {
-      // Diode: exponential
-      y = 1e-9 * (Math.exp(x * 30) - 1);
-    }
-    if (fit) {
-      const yfit = y * (1 + (Math.random() - 0.5) * 0.05);
-      points.push({ x, y, yfit });
-    } else {
-      points.push({ x, y });
-    }
-  }
-  return points;
+interface CurveData {
+  ivar: number[];
+  dvar: number[];
+  metadata: Record<string, unknown>;
+  loading: boolean;
+  error: string | null;
 }
 
 export function CurveVisualizer() {
-  const [curves, setCurves] = useState<Curve[]>(allCurves);
-  const [activeType, setActiveType] = useState<CurveType>("idvg");
-  const [logScale, setLogScale] = useState(true);
-  const [searchTerm, setSearchTerm] = useState("");
+  const { projectId, dataset, fitResult, backendRunning, startBackend, setLog } = useApp();
 
-  const visibleCurves = useMemo(
-    () => curves.filter((c) => c.type === activeType && c.visible && c.name.toLowerCase().includes(searchTerm.toLowerCase())),
-    [curves, activeType, searchTerm]
-  );
+  // 每个 subplot 的曲线数据 + 加载状态
+  const [data, setData] = useState<Record<string, CurveData>>(() => {
+    const init: Record<string, CurveData> = {};
+    SUBPLOTS.forEach((s) => {
+      init[s.id] = { ivar: [], dvar: [], metadata: {}, loading: false, error: null };
+    });
+    return init;
+  });
 
-  const toggleVisibility = (name: string) => {
-    setCurves((prev) => prev.map((c) => (c.name === name ? { ...c, visible: !c.visible } : c)));
+  // Backend 启动
+  const onStartBackend = async () => {
+    setLog("info", "Starting Python backend...");
+    await startBackend();
   };
 
+  // 拉取一个 subplot 的曲线
+  const refreshCurve = async (id: string, curveType: string) => {
+    if (!projectId) return;
+    setData((prev) => ({ ...prev, [id]: { ...prev[id], loading: true, error: null } }));
+    try {
+      const c = await api.getCurve(projectId, curveType);
+      setData((prev) => ({
+        ...prev,
+        [id]: { ivar: c.ivar, dvar: c.dvar, metadata: c.metadata, loading: false, error: null },
+      }));
+      setLog("success", `Loaded ${curveType}: ${c.ivar.length} pts`);
+    } catch (e: any) {
+      setData((prev) => ({ ...prev, [id]: { ...prev[id], loading: false, error: e.message } }));
+      setLog("error", `Load ${curveType} failed: ${e.message}`);
+    }
+  };
+
+  // 自动首次加载
+  useEffect(() => {
+    if (!projectId) return;
+    SUBPLOTS.forEach((s) => refreshCurve(s.id, s.curveType));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
+
   return (
-    <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+    <div style={{ flex: 1, overflow: "auto", padding: "16px 20px", background: C.bg }}>
       {/* Header */}
-      <div style={{ padding: "14px 20px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", marginBottom: 14 }}>
         <div style={{ flex: 1 }}>
-          <h1 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>Curve Visualizer</h1>
-          <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 1 }}>
-            {visibleCurves.length} of {curves.length} curves visible
+          <h1 style={{ fontSize: 17, fontWeight: 600, color: C.text, margin: 0 }}>
+            Curve Visualizer
+          </h1>
+          <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>
+            5 subplots · {projectId ? `Project ${projectId.slice(0, 8)}` : "No project loaded"}
+            {fitResult && ` · Total RMS = ${fitResult.total_rms.toFixed(3)}`}
           </div>
         </div>
-        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-          <Badge variant={logScale ? "primary" : "default"} onClick={() => setLogScale(!logScale)} style={{ cursor: "pointer" }}>
-            {logScale ? "LOG" : "LIN"}
-          </Badge>
-          <Button variant="outline" size="sm">
-            <Download size={12} style={{ marginRight: 4 }} />Export PNG
+        <Badge variant={backendRunning ? "success" : "error"}>
+          {backendRunning ? "● Backend OK" : "● Backend Down"}
+        </Badge>
+        {!backendRunning && (
+          <Button onClick={onStartBackend} variant="primary" style={{ marginLeft: 8 }}>
+            <Power size={12} /> Start Backend
           </Button>
-        </div>
+        )}
       </div>
 
-      {/* Body: 3-pane */}
-      <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
-        {/* Left: curve tree */}
-        <div style={{ width: 240, borderRight: "1px solid var(--border)", background: "var(--surface)", display: "flex", flexDirection: "column" }}>
-          <div style={{ padding: 8 }}>
-            <Input
-              size="sm"
-              placeholder="Search curves..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+      {/* Empty state */}
+      {!projectId && (
+        <Card>
+          <div style={{ textAlign: "center", padding: 48, color: C.muted }}>
+            <FileText size={32} style={{ marginBottom: 8, opacity: 0.3 }} />
+            <div style={{ fontSize: 13 }}>No project loaded.</div>
+            <div style={{ fontSize: 11, marginTop: 4 }}>Open Data Browser to load a SPICE dataset.</div>
+          </div>
+        </Card>
+      )}
+
+      {/* 2x3 Grid: 5 subplots + Device Info */}
+      {projectId && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+          {SUBPLOTS.map((s) => (
+            <Subplot
+              key={s.id}
+              def={s}
+              data={data[s.id]}
+              onRefresh={() => refreshCurve(s.id, s.curveType)}
             />
-          </div>
-
-          <div style={{ padding: "0 8px 4px", display: "flex", gap: 4, flexWrap: "wrap" }}>
-            {(["idvg", "idvd", "cv", "qg", "diode"] as CurveType[]).map((t) => (
-              <Badge
-                key={t}
-                variant={activeType === t ? "primary" : "default"}
-                onClick={() => setActiveType(t)}
-                style={{ cursor: "pointer" }}
-              >
-                {t.toUpperCase()}
-              </Badge>
-            ))}
-          </div>
-
-          <div style={{ flex: 1, overflowY: "auto", padding: "4px 8px" }}>
-            {curves
-              .filter((c) => c.type === activeType)
-              .map((c) => (
-                <div
-                  key={c.name}
-                  onClick={() => toggleVisibility(c.name)}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 6,
-                    padding: "5px 8px",
-                    borderRadius: 4,
-                    cursor: "pointer",
-                    backgroundColor: c.visible ? "var(--hover)" : "transparent",
-                    fontSize: 11,
-                  }}
-                >
-                  <div style={{ width: 10, height: 10, borderRadius: 2, background: c.color, flexShrink: 0 }} />
-                  <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</span>
-                  {c.fit && <Badge variant="success">fit</Badge>}
-                  {c.visible ? <Eye size={11} color="var(--muted)" /> : <EyeOff size={11} color="var(--muted)" />}
-                </div>
-              ))}
-          </div>
+          ))}
+          <DeviceInfoCard
+            projectId={projectId}
+            dataset={dataset}
+            fitResult={fitResult}
+          />
         </div>
-
-        {/* Center: plot */}
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: 12, overflow: "hidden" }}>
-          <Card style={{ flex: 1, padding: 8, display: "flex", flexDirection: "column" }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart margin={{ top: 8, right: 20, bottom: 20, left: 20 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                <XAxis
-                  dataKey="x"
-                  type="number"
-                  tick={{ fontSize: 10, fill: "var(--muted)" }}
-                  stroke="var(--border)"
-                  label={{ value: xAxisLabel(activeType), position: "insideBottom", offset: -8, style: { fontSize: 11, fill: "var(--muted)" } }}
-                />
-                <YAxis
-                  scale={logScale ? "log" : "linear"}
-                  domain={logScale ? ["auto", "auto"] : [0, "auto"]}
-                  tick={{ fontSize: 10, fill: "var(--muted)" }}
-                  stroke="var(--border)"
-                  allowDataOverflow={logScale}
-                  label={{ value: yAxisLabel(activeType), angle: -90, position: "insideLeft", offset: 8, style: { fontSize: 11, fill: "var(--muted)" } }}
-                />
-                <Tooltip
-                  shared={false}
-                  contentStyle={{
-                    background: "#fff",
-                    border: "1px solid var(--border)",
-                    borderRadius: 5,
-                    fontSize: 11,
-                  }}
-                  formatter={(v: number) => v.toExponential(2)}
-                />
-                <Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} />
-                {visibleCurves.map((c) => {
-                  const data = generateMockData(c.type, !!c.fit);
-                  return (
-                    <Line
-                      key={c.name}
-                      data={data}
-                      type="monotone"
-                      dataKey="y"
-                      name={c.name}
-                      stroke={c.color}
-                      strokeWidth={1.5}
-                      dot={false}
-                      strokeDasharray={c.fit ? "5 3" : ""}
-                    />
-                  );
-                })}
-              </LineChart>
-            </ResponsiveContainer>
-          </Card>
-        </div>
-
-        {/* Right: metadata + FoM */}
-        <div style={{ width: 300, borderLeft: "1px solid var(--border)", display: "flex", flexDirection: "column", background: "var(--surface)" }}>
-          <div style={{ padding: 10, borderBottom: "1px solid var(--border)" }}>
-            <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>Metadata</div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <MetaRow label="Type" value={activeType.toUpperCase()} />
-              <MetaRow label="Curves" value={String(visibleCurves.length)} />
-              <MetaRow label="Temperature" value="25°C / 150°C" />
-              <MetaRow label="Vds / Vgs" value="0.5V / 5V" />
-              <MetaRow label="Source" value="datademo/SDH10N2P1WC-AA_SPICE_Data.xlsx" mono />
-            </div>
-          </div>
-
-          <div style={{ padding: 10, borderBottom: "1px solid var(--border)" }}>
-            <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>Figure of Merit</div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              {activeType === "idvg" && (
-                <>
-                  <FoMRow label="Vth" value="2.94 V" method="Id=1e-7A" />
-                  <FoMRow label="Ion" value="78.5 A" method="@Vg=10V" />
-                  <FoMRow label="Ioff" value="3.2e-9 A" method="@Vg=0V" />
-                  <FoMRow label="SS" value="320 mV/dec" />
-                  <FoMRow label="Gm_max" value="255 S" />
-                </>
-              )}
-              {activeType === "idvd" && (
-                <>
-                  <FoMRow label="Rds(on)" value="1.85 mΩ" method="@Vg=10V" />
-                  <FoMRow label="Vsat" value="9.5e4 m/s" />
-                  <FoMRow label="Ron @Vg=5V" value="3.5 mΩ" />
-                </>
-              )}
-              {activeType === "cv" && (
-                <>
-                  <FoMRow label="Ciss @25V" value="13.1 nF" />
-                  <FoMRow label="Coss @25V" value="4.75 nF" />
-                  <FoMRow label="Crss @25V" value="174 pF" />
-                  <FoMRow label="Eoss" value="9.5 µJ" />
-                </>
-              )}
-              {activeType === "qg" && (
-                <>
-                  <FoMRow label="Qg" value="153.99 nC" />
-                  <FoMRow label="Qgd" value="15.87 nC" />
-                  <FoMRow label="Qgs" value="67.61 nC" />
-                  <FoMRow label="Vgs(pl)" value="4.87 V" />
-                </>
-              )}
-              {activeType === "diode" && (
-                <>
-                  <FoMRow label="Vsd@10A" value="0.9 V" />
-                  <FoMRow label="Vf temp coef" value="-1.1 mV/°C" />
-                </>
-              )}
-            </div>
-          </div>
-
-          <div style={{ flex: 1 }} />
-
-          <div style={{ padding: 10, borderTop: "1px solid var(--border)" }}>
-            <Button variant="primary" size="sm" style={{ width: "100%" }}>
-              <TrendingUp size={12} style={{ marginRight: 4 }} />Fit this curve
-            </Button>
-          </div>
-        </div>
-      </div>
+      )}
     </div>
   );
 }
 
-function xAxisLabel(type: CurveType): string {
-  return { idvg: "Vgs (V)", idvd: "Vds (V)", cv: "Vds (V)", qg: "Vgs (V)", diode: "Vsd (V)" }[type];
-}
+// ============================================================
+//  Subplot 子组件
+// ============================================================
+function Subplot({ def, data, onRefresh }: {
+  def: SubplotDef; data: CurveData; onRefresh: () => void;
+}) {
+  // 转 recharts data
+  const points = data.ivar.map((v, i) => ({ x: v, y: data.dvar[i] }));
 
-function yAxisLabel(type: CurveType): string {
-  return { idvg: "Id (A)", idvd: "Id (A)", cv: "Capacitance (pF)", qg: "Qg (nC)", diode: "Is (A)" }[type];
-}
-
-function MetaRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
-    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11 }}>
-      <span style={{ color: "var(--muted)" }}>{label}</span>
-      <span style={{ color: "var(--text)", fontFamily: mono ? "'JetBrains Mono', Consolas, monospace" : "'Inter', sans-serif" }}>{value}</span>
-    </div>
+    <Card>
+      {/* 标题 + Refresh */}
+      <div style={{ display: "flex", alignItems: "center", marginBottom: 6 }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color: C.text, flex: 1 }}>
+          {def.title}
+        </span>
+        <span style={{ fontSize: 10, color: C.muted, marginRight: 6 }}>
+          {data.loading ? "loading…" :
+           data.error ? `error: ${data.error.slice(0, 20)}` :
+           `${data.ivar.length} pts`}
+        </span>
+        <button
+          onClick={onRefresh}
+          disabled={data.loading}
+          title="Refresh curve"
+          style={{
+            background: "transparent", border: `1px solid ${C.border}`,
+            borderRadius: 4, padding: "2px 6px", cursor: data.loading ? "wait" : "pointer",
+            display: "flex", alignItems: "center", gap: 3,
+            fontSize: 10, color: C.muted, opacity: data.loading ? 0.5 : 1,
+          }}
+        >
+          <RefreshCw size={10} className={data.loading ? "spin" : ""} /> Refresh
+        </button>
+      </div>
+
+      {/* 图 */}
+      <div style={{ height: 200 }}>
+        {data.ivar.length === 0 && !data.loading ? (
+          <div style={{
+            display: "flex", alignItems: "center", justifyContent: "center",
+            height: "100%", color: C.muted, fontSize: 11,
+          }}>
+            <AlertCircle size={14} style={{ marginRight: 4 }} />
+            No data. Click Refresh.
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={points} margin={{ top: 6, right: 12, bottom: 18, left: 18 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+              <XAxis
+                dataKey="x"
+                type="number"
+                tick={{ fontSize: 9, fill: C.muted }}
+                stroke={C.border}
+                label={{ value: def.xLabel, position: "insideBottom", offset: -6, style: { fontSize: 10, fill: C.muted } }}
+              />
+              <YAxis
+                scale={def.yScale}
+                domain={["auto", "auto"]}
+                tick={{ fontSize: 9, fill: C.muted }}
+                stroke={C.border}
+                allowDataOverflow={def.yScale === "log"}
+                label={{
+                  value: def.yLabel, angle: -90,
+                  position: "insideLeft", offset: 10,
+                  style: { fontSize: 10, fill: C.muted },
+                }}
+              />
+              <Tooltip
+                contentStyle={{
+                  background: "#fff", border: `1px solid ${C.border}`,
+                  borderRadius: 4, fontSize: 10,
+                }}
+                formatter={(v: number) => v.toExponential(2)}
+              />
+              <Line
+                type="monotone"
+                dataKey="y"
+                stroke={def.color}
+                strokeWidth={1.4}
+                dot={false}
+                isAnimationActive={false}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        )}
+      </div>
+    </Card>
   );
 }
 
-function FoMRow({ label, value, method }: { label: string; value: string; method?: string }) {
+// ============================================================
+//  Device Info 子组件
+// ============================================================
+function DeviceInfoCard({ projectId, dataset, fitResult }: {
+  projectId: string;
+  dataset: any;
+  fitResult: any;
+}) {
   return (
-    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, padding: "2px 0" }}>
-      <span style={{ color: "var(--muted)" }}>{label}</span>
-      <div style={{ textAlign: "right" }}>
-        <div style={{ color: "var(--text)", fontFamily: "'JetBrains Mono', Consolas, monospace", fontWeight: 500 }}>{value}</div>
-        {method && <div style={{ color: "var(--muted)", fontSize: 9 }}>{method}</div>}
+    <Card>
+      <div style={{ fontSize: 12, fontWeight: 600, color: C.text, marginBottom: 8 }}>
+        Device Info
       </div>
+      <Row label="Project ID" value={projectId.slice(0, 8) + "…"} mono />
+      {dataset && (
+        <>
+          <Row label="Part" value={dataset.device_info.part_number} />
+          <Row label="Package" value={dataset.device_info.package} />
+          <Row label="BVdss" value={`${dataset.device_info.bvdss_v} V`} />
+          <Row label="RDSon max" value={`${dataset.device_info.rdson_max_mohm} mΩ`} />
+          <Row label="Id rated" value={`${dataset.device_info.id_rated_a} A`} />
+          <Row label="Vth typ" value={`${dataset.device_info.vth_typ_v} V`} />
+        </>
+      )}
+      {dataset?.key_params && (
+        <>
+          <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase",
+                        marginTop: 8, marginBottom: 4, letterSpacing: "0.05em" }}>
+            Key SPICE Params
+          </div>
+          <Row label="Vth25" value={`${dataset.key_params.vth_25c_v} V`} />
+          <Row label="RDSon@10V" value={`${(dataset.key_params.rdson_25c_10v_ohm * 1e3).toFixed(2)} mΩ`} />
+          <Row label="Qg@20V" value={`${dataset.key_params.qg_on_20v_nc} nC`} />
+          <Row label="Ciss@25V" value={`${dataset.key_params.ciss_25v_pf} pF`} />
+        </>
+      )}
+      {fitResult && (
+        <>
+          <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase",
+                        marginTop: 8, marginBottom: 4, letterSpacing: "0.05em" }}>
+            Last Fit
+          </div>
+          <Row label="Total RMS" value={fitResult.total_rms.toFixed(3)} />
+          <Row label="Success" value={fitResult.success ? "✓" : "✗"} />
+          <Row label="Stages" value={`${fitResult.stage_results?.length || 0} / 6`} />
+        </>
+      )}
+    </Card>
+  );
+}
+
+function Row({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div style={{
+      display: "flex", justifyContent: "space-between",
+      padding: "2px 0", fontSize: 11,
+    }}>
+      <span style={{ color: C.muted }}>{label}</span>
+      <span style={{
+        color: C.text,
+        fontFamily: mono || true ? "'JetBrains Mono', Consolas, monospace" : "inherit",
+      }}>{value}</span>
     </div>
   );
 }

@@ -1,189 +1,322 @@
-// DataBrowser.tsx - 数据浏览器
-import { useState } from "react";
-import { Upload, FileText, Trash2, Eye, Filter, ChevronDown, FolderOpen, AlertTriangle, CheckCircle2, RefreshCw } from "lucide-react";
+// DataBrowser.tsx - 数据浏览器 (真实 API)
+import { useState, useEffect } from "react";
+import {
+  Upload, FileText, Eye, FolderOpen, RefreshCw, Server, ServerOff
+} from "lucide-react";
 import { Card, CardHeader, Button, Badge } from "./ui";
+import { useApp } from "../../lib/store";
+import * as api from "../../lib/api";
+import { invoke } from "@tauri-apps/api/core";
 
-interface DataFile {
+interface ProjectItem {
+  project_id: string;
   name: string;
-  type: "idvg" | "idvd" | "cv" | "qg" | "diode";
-  points: number;
-  status: "loaded" | "cleaned" | "outliers";
-  size: string;
+  n_points: number;
 }
 
-const mockFiles: DataFile[] = [
-  { name: "ID-VGS_5VDS", type: "idvg", points: 139, status: "cleaned", size: "8.2 KB" },
-  { name: "ID-VGS_0.5VDS", type: "idvg", points: 202, status: "cleaned", size: "11.4 KB" },
-  { name: "ID-VDS", type: "idvd", points: 261, status: "cleaned", size: "15.1 KB" },
-  { name: "CissCossCrss-VDS", type: "cv", points: 103, status: "cleaned", size: "6.8 KB" },
-  { name: "VGS-Qg", type: "qg", points: 171, status: "loaded", size: "10.5 KB" },
-  { name: "IS-VSD", type: "diode", points: 142, status: "outliers", size: "9.0 KB" },
+interface CurveInfo {
+  type: string;
+  label: string;
+  endpoint: string;
+  ivarLabel: string;
+  dvarLabel: string;
+}
+
+const CURVE_CATALOG: CurveInfo[] = [
+  { type: "idvg_5v",  label: "Id-Vg @Vds=5V",   endpoint: "idvg_5v",  ivarLabel: "Vgs (V)", dvarLabel: "Id (A)" },
+  { type: "idvg_05v", label: "Id-Vg @Vds=0.5V", endpoint: "idvg_05v", ivarLabel: "Vgs (V)", dvarLabel: "Id (A)" },
+  { type: "idvd",     label: "Id-Vd @Vgs=10V",  endpoint: "idvd",     ivarLabel: "Vds (V)", dvarLabel: "Id (A)" },
+  { type: "cv_vds_ciss", label: "Ciss vs Vds",  endpoint: "cv_vds_ciss", ivarLabel: "Vds (V)", dvarLabel: "Ciss (pF)" },
+  { type: "cv_vds_coss", label: "Coss vs Vds",  endpoint: "cv_vds_coss", ivarLabel: "Vds (V)", dvarLabel: "Coss (pF)" },
+  { type: "cv_vds_crss", label: "Crss vs Vds",  endpoint: "cv_vds_crss", ivarLabel: "Vds (V)", dvarLabel: "Crss (pF)" },
+  { type: "body_diode",  label: "Body Diode",   endpoint: "body_diode",  ivarLabel: "Vsd (V)", dvarLabel: "Is (A)" },
 ];
 
-const typeLabels: Record<DataFile["type"], string> = {
-  idvg: "Id-Vg",
-  idvd: "Id-Vd",
-  cv: "C-V",
-  qg: "Qg",
-  diode: "Diode",
-};
-
-const statusBadge: Record<DataFile["status"], { variant: "default" | "primary" | "success" | "warning" | "error"; label: string }> = {
-  loaded: { variant: "warning", label: "未清洗" },
-  cleaned: { variant: "success", label: "已清洗" },
-  outliers: { variant: "error", label: "有异常" },
-};
-
 export function DataBrowser() {
-  const [selected, setSelected] = useState<string | null>("ID-VGS_5VDS");
+  const {
+    projectId, dataset, backendRunning,
+    loadProject, selectProject, startBackend, refreshBackend, setLog,
+  } = useApp();
+
+  const [projects, setProjects] = useState<ProjectItem[]>([]);
+  const [selectedCurve, setSelectedCurve] = useState<string>("idvg_5v");
+  const [curvePreview, setCurvePreview] = useState<{
+    ivar: number[]; dvar: number[]; meta: Record<string, unknown>;
+  } | null>(null);
+  const [loadingCurve, setLoadingCurve] = useState(false);
+  const [loadingFile, setLoadingFile] = useState(false);
+
+  // 拉项目列表
+  const refreshProjects = async () => {
+    try {
+      const ps = await api.listProjects();
+      setProjects(ps);
+      setLog("info", `Found ${ps.length} project(s)`);
+    } catch (e: any) {
+      setLog("error", `listProjects failed: ${e.message}`);
+    }
+  };
+
+  useEffect(() => {
+    if (backendRunning) refreshProjects();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [backendRunning]);
+
+  // 选项目时拉当前曲线
+  useEffect(() => {
+    if (!projectId) { setCurvePreview(null); return; }
+    void loadCurvePreview(selectedCurve);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, selectedCurve]);
+
+  const loadCurvePreview = async (curveType: string) => {
+    if (!projectId) return;
+    setLoadingCurve(true);
+    try {
+      const r = await api.getCurve(projectId, curveType);
+      setCurvePreview({ ivar: r.ivar, dvar: r.dvar, meta: r.metadata });
+    } catch (e: any) {
+      setCurvePreview(null);
+      setLog("error", `getCurve(${curveType}) failed: ${e.message}`);
+    } finally {
+      setLoadingCurve(false);
+    }
+  };
+
+  const onLoadExcel = async () => {
+    setLoadingFile(true);
+    try {
+      const path = await invoke<string>("open_excel_file");
+      if (path) {
+        await loadProject(path);
+        await refreshProjects();
+      }
+    } catch (e: any) {
+      setLog("error", `Load Excel failed: ${e.message}`);
+    } finally {
+      setLoadingFile(false);
+    }
+  };
+
+  const onSelectProject = (pid: string) => {
+    if (pid === projectId) return;
+    void selectProject(pid);
+  };
 
   return (
-    <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+    <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column", background: "#ffffff" }}>
       {/* Header */}
-      <div style={{ padding: "14px 20px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 12 }}>
+      <div style={{ padding: "14px 20px", borderBottom: "1px solid #e5e5e5", display: "flex", alignItems: "center", gap: 12 }}>
         <div style={{ flex: 1 }}>
-          <h1 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>Data Browser</h1>
-          <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 1 }}>6 files  ·  1,018 total points  ·  5 cleaned</div>
+          <h1 style={{ margin: 0, fontSize: 15, fontWeight: 600, color: "#2c2c2c" }}>Data Browser</h1>
+          <div style={{ fontSize: 12, color: "#6b7280", marginTop: 1 }}>
+            {dataset
+              ? `${dataset.device_info?.part_number || "—"}  ·  ${projects.length} project(s) on server`
+              : `${projects.length} project(s) on server`}
+          </div>
         </div>
-        <Button variant="outline">
-          <RefreshCw size={13} style={{ marginRight: 5 }} />Re-scan
+        <Badge variant={backendRunning ? "success" : "error"}>
+          {backendRunning ? <><Server size={11} />&nbsp;Backend OK</> : <><ServerOff size={11} />&nbsp;Backend Down</>}
+        </Badge>
+        {!backendRunning && (
+          <Button variant="outline" size="sm" onClick={startBackend}>
+            Start Backend
+          </Button>
+        )}
+        <Button variant="outline" size="sm" onClick={refreshBackend}>
+          <RefreshCw size={13} style={{ marginRight: 5 }} />Ping
         </Button>
-        <Button variant="primary">
-          <Upload size={13} style={{ marginRight: 5 }} />Import Excel
+        <Button variant="primary" size="sm" onClick={onLoadExcel} disabled={loadingFile || !backendRunning}>
+          <Upload size={13} style={{ marginRight: 5 }} />{loadingFile ? "Loading..." : "Load Excel"}
         </Button>
       </div>
 
       {/* Body */}
       <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
-        {/* Left: file tree */}
-        <div style={{ width: 280, borderRight: "1px solid var(--border)", background: "var(--surface)", overflowY: "auto" }}>
-          <div style={{ padding: "8px 10px", fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-            Loaded Files
-          </div>
-          {mockFiles.map((f) => (
+        {/* Left: project + curve list */}
+        <div style={{ width: 280, borderRight: "1px solid #e5e5e5", background: "#fafafa", overflowY: "auto" }}>
+          <SectionHeader label="Projects" count={projects.length} action={
+            <button onClick={refreshProjects} title="Refresh"
+              style={{ background: "transparent", border: "none", cursor: "pointer", padding: 2 }}>
+              <RefreshCw size={11} color="#6b7280" />
+            </button>
+          } />
+          {projects.length === 0 ? (
+            <div style={{ padding: "10px 12px", fontSize: 11, color: "#6b7280", fontStyle: "italic" }}>
+              {backendRunning ? "No projects. Load an Excel file." : "Backend not running."}
+            </div>
+          ) : (
+            projects.map((p) => (
+              <div
+                key={p.project_id}
+                onClick={() => onSelectProject(p.project_id)}
+                style={{
+                  padding: "8px 12px", cursor: "pointer",
+                  backgroundColor: p.project_id === projectId ? "#e6f4ff" : "transparent",
+                  borderLeft: p.project_id === projectId ? "3px solid #0d99ff" : "3px solid transparent",
+                  display: "flex", alignItems: "center", gap: 8, fontSize: 12,
+                }}
+              >
+                <FileText size={13} color={p.project_id === projectId ? "#0d99ff" : "#6b7280"} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ color: "#2c2c2c", fontWeight: p.project_id === projectId ? 500 : 400 }}>{p.name}</div>
+                  <div style={{ fontSize: 10, color: "#6b7280" }}>{p.project_id.slice(0, 8)}  ·  {p.n_points} pts</div>
+                </div>
+              </div>
+            ))
+          )}
+
+          <SectionHeader label="Curves" />
+          {CURVE_CATALOG.map((c) => (
             <div
-              key={f.name}
-              onClick={() => setSelected(f.name)}
+              key={c.type}
+              onClick={() => setSelectedCurve(c.type)}
               style={{
-                padding: "8px 10px",
-                cursor: "pointer",
-                backgroundColor: selected === f.name ? "var(--accent)" : "transparent",
-                borderLeft: selected === f.name ? "3px solid var(--primary)" : "3px solid transparent",
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                fontSize: 12,
-                transition: "background-color 0.1s",
+                padding: "7px 12px", cursor: projectId ? "pointer" : "not-allowed",
+                opacity: projectId ? 1 : 0.4,
+                backgroundColor: selectedCurve === c.type ? "#e6f4ff" : "transparent",
+                borderLeft: selectedCurve === c.type ? "3px solid #0d99ff" : "3px solid transparent",
+                display: "flex", alignItems: "center", gap: 8, fontSize: 12,
               }}
             >
-              <FileText size={13} color={selected === f.name ? "var(--primary)" : "var(--muted)"} />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ color: "var(--text)", fontWeight: selected === f.name ? 500 : 400 }}>{f.name}</div>
-                <div style={{ fontSize: 10, color: "var(--muted)" }}>{typeLabels[f.type]}  ·  {f.points} pts</div>
-              </div>
-              <Badge variant={statusBadge[f.status].variant}>{statusBadge[f.status].label}</Badge>
+              <Eye size={12} color={selectedCurve === c.type ? "#0d99ff" : "#6b7280"} />
+              <span style={{ color: "#2c2c2c" }}>{c.label}</span>
             </div>
           ))}
         </div>
 
-        {/* Right: file detail */}
-        <div style={{ flex: 1, overflow: "auto", padding: 20 }}>
-          {selected ? <FileDetail file={mockFiles.find((f) => f.name === selected)!} /> : <EmptyState />}
+        {/* Right: detail */}
+        <div style={{ flex: 1, overflow: "auto", padding: 20, background: "#ffffff" }}>
+          {!dataset ? <NoDatasetState /> : <DatasetDetail dataset={dataset} curve={curvePreview} loading={loadingCurve} curveInfo={CURVE_CATALOG.find((c) => c.type === selectedCurve)!} />}
         </div>
       </div>
     </div>
   );
 }
 
-function EmptyState() {
+function SectionHeader({ label, count, action }: { label: string; count?: number; action?: React.ReactNode }) {
   return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", color: "var(--muted)" }}>
-      <FolderOpen size={48} style={{ marginBottom: 12, opacity: 0.4 }} />
-      <div style={{ fontSize: 14 }}>Select a file from the left to view details</div>
+    <div style={{
+      padding: "10px 12px 4px", fontSize: 10, color: "#6b7280",
+      textTransform: "uppercase", letterSpacing: "0.05em",
+      display: "flex", alignItems: "center", justifyContent: "space-between",
+    }}>
+      <span>{label}{count !== undefined && ` (${count})`}</span>
+      {action}
     </div>
   );
 }
 
-function FileDetail({ file }: { file: DataFile }) {
-  // Mock preview rows
-  const previewRows = Array.from({ length: 8 }, (_, i) => ({
-    v: (i * file.points / 10).toFixed(3),
-    target: (Math.random() * 100).toFixed(2),
-  }));
+function NoDatasetState() {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", color: "#6b7280" }}>
+      <FolderOpen size={48} style={{ marginBottom: 12, opacity: 0.4 }} />
+      <div style={{ fontSize: 14 }}>No dataset loaded.</div>
+      <div style={{ fontSize: 11, marginTop: 4 }}>Click <b>Load Excel</b> above to start.</div>
+    </div>
+  );
+}
+
+function DatasetDetail({ dataset, curve, loading, curveInfo }: {
+  dataset: any;
+  curve: { ivar: number[]; dvar: number[]; meta: Record<string, unknown> } | null;
+  loading: boolean;
+  curveInfo: CurveInfo;
+}) {
+  const previewRows = curve ? curve.ivar.slice(0, 20).map((v, i) => ({ ivar: v, dvar: curve.dvar[i] })) : [];
 
   return (
     <div>
+      {/* Device card */}
       <Card>
         <CardHeader
-          title={file.name}
-          subtitle={`${typeLabels[file.type]}  ·  ${file.points} data points  ·  ${file.size}`}
+          title={dataset.device_info?.part_number || "—"}
+          subtitle={`${dataset.device_info?.package || ""}  ·  BVdss ${dataset.device_info?.bvdss_v || "?"}V  ·  RDSon ${dataset.device_info?.rdson_max_mohm || "?"}mΩ`}
           action={
-            <div style={{ display: "flex", gap: 6 }}>
-              <Button variant="outline" size="sm">
-                <Eye size={12} style={{ marginRight: 4 }} />Preview
-              </Button>
-              <Button variant="outline" size="sm">
-                <Filter size={12} style={{ marginRight: 4 }} />Filter
-              </Button>
-              <Button variant="ghost" size="sm">
-                <Trash2 size={12} />
-              </Button>
-            </div>
+            <Badge variant="success">{Object.keys(dataset.key_params || {}).length} key params</Badge>
           }
         />
-
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginTop: 8 }}>
-          <Stat label="Total points" value={String(file.points)} />
-          <Stat label="Outliers" value={file.status === "outliers" ? "12" : "0"} color={file.status === "outliers" ? "var(--error)" : "var(--success)"} />
-          <Stat label="NaN" value="0" color="var(--success)" />
-          <Stat label="Duplicates" value="0" color="var(--success)" />
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 8 }}>
+          <Stat label="Vth 25°C" value={`${dataset.key_params?.vth_25c_v ?? "—"} V`} />
+          <Stat label="RDSon @10V" value={`${(dataset.key_params?.rdson_25c_10v_ohm ?? 0) * 1e3} mΩ`} />
+          <Stat label="Qg @20V" value={`${dataset.key_params?.qg_on_20v_nc ?? "—"} nC`} />
+          <Stat label="Ciss @25V" value={`${dataset.key_params?.ciss_25v_pf ?? "—"} pF`} />
+          <Stat label="Coss @25V" value={`${dataset.key_params?.coss_25v_pf ?? "—"} pF`} />
+          <Stat label="Crss @25V" value={`${dataset.key_params?.crss_25v_pf ?? "—"} pF`} />
         </div>
       </Card>
 
+      {/* Curve preview */}
       <Card style={{ marginTop: 12 }}>
-        <CardHeader title="Data Preview" subtitle="First 8 rows" />
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-          <thead>
-            <tr>
-              <th style={th}>#</th>
-              <th style={th}>ivar (V)</th>
-              <th style={th}>dvar ({typeLabels[file.type].split("-")[1] || "value"})</th>
-            </tr>
-          </thead>
-          <tbody>
-            {previewRows.map((row, i) => (
-              <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
-                <td style={td}>{i + 1}</td>
-                <td style={{ ...td, fontFamily: "'JetBrains Mono', Consolas, monospace" }}>{row.v}</td>
-                <td style={{ ...td, fontFamily: "'JetBrains Mono', Consolas, monospace" }}>{row.target}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <CardHeader
+          title={`Curve Preview: ${curveInfo.label}`}
+          subtitle={loading
+            ? "Loading..."
+            : curve
+              ? `${curve.ivar.length} data points  ·  showing first 20`
+              : "No data"}
+          action={
+            curve && <Badge variant="primary">{(curve.meta as any)?.curve_type || curveInfo.endpoint}</Badge>
+          }
+        />
+        {!loading && curve && previewRows.length > 0 ? (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+              <thead>
+                <tr>
+                  <th style={th}>#</th>
+                  <th style={th}>{curveInfo.ivarLabel}</th>
+                  <th style={th}>{curveInfo.dvarLabel}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {previewRows.map((row, i) => (
+                  <tr key={i} style={{ borderBottom: "1px solid #e5e5e5" }}>
+                    <td style={td}>{i + 1}</td>
+                    <td style={{ ...td, fontFamily: "'JetBrains Mono', Consolas, monospace" }}>
+                      {Number(row.ivar).toExponential(4)}
+                    </td>
+                    <td style={{ ...td, fontFamily: "'JetBrains Mono', Consolas, monospace" }}>
+                      {Number(row.dvar).toExponential(4)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : !loading ? (
+          <div style={{ padding: 24, textAlign: "center", color: "#6b7280", fontSize: 12 }}>
+            Select a curve from the left.
+          </div>
+        ) : null}
+      </Card>
+
+      {/* Curve counts */}
+      <Card style={{ marginTop: 12 }}>
+        <CardHeader title="Available Curves on Server" />
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginTop: 8 }}>
+          {Object.entries(dataset.curve_counts || {}).map(([k, v]) => (
+            <Stat key={k} label={k} value={`${v} pts`} />
+          ))}
+        </div>
       </Card>
     </div>
   );
 }
 
 const th: React.CSSProperties = {
-  textAlign: "left",
-  padding: "5px 12px",
-  color: "var(--muted)",
-  fontWeight: 500,
-  borderBottom: "1px solid var(--border)",
-  fontSize: 10,
+  textAlign: "left", padding: "5px 12px", color: "#6b7280",
+  fontWeight: 500, borderBottom: "1px solid #e5e5e5", fontSize: 10,
 };
 const td: React.CSSProperties = {
-  padding: "5px 12px",
-  color: "var(--text)",
-  fontSize: 11,
+  padding: "5px 12px", color: "#2c2c2c", fontSize: 11,
 };
 
-function Stat({ label, value, color }: { label: string; value: string; color?: string }) {
+function Stat({ label, value }: { label: string; value: string; color?: string }) {
   return (
-    <div style={{ padding: "8px 10px", background: "var(--bg)", borderRadius: 5, border: "1px solid var(--border)" }}>
-      <div style={{ fontSize: 10, color: "var(--muted)", marginBottom: 2 }}>{label}</div>
-      <div style={{ fontSize: 16, fontWeight: 600, color: color || "var(--text)", fontFamily: "'JetBrains Mono', Consolas, monospace" }}>{value}</div>
+    <div style={{ padding: "8px 10px", background: "#ffffff", borderRadius: 5, border: "1px solid #e5e5e5" }}>
+      <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 2 }}>{label}</div>
+      <div style={{ fontSize: 14, fontWeight: 600, color: "#2c2c2c", fontFamily: "'JetBrains Mono', Consolas, monospace" }}>{value}</div>
     </div>
   );
 }

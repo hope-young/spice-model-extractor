@@ -1,182 +1,145 @@
-// Dashboard.tsx - 项目概览
+// Dashboard.tsx - 项目概览 (真实 API)
 import {
-  Activity, FileText, Clock, TrendingUp, Zap, Cpu
+  Activity, FileText, Clock, TrendingUp, Zap, Cpu, RefreshCw
 } from "lucide-react";
-import { Card, CardHeader, Badge } from "./ui";
-import { MOCK_PROJECT } from "../../lib/constants";
+import { Card, Badge } from "./ui";
+import { useApp } from "../../lib/store";
 
 export function Dashboard() {
+  const { projectId, dataset, fitResult, model, backendRunning, refreshBackend } = useApp();
+
+  const totalParams = model ? Object.keys(model.params || {}).length : 0;
+  const fittedParams = model && model.fitted ? Object.keys(model.fitted).length : 0;
+  const stages = fitResult?.stage_results?.length || 0;
+
   return (
-    <div style={{ flex: 1, overflow: "auto", padding: "20px 24px" }}>
+    <div style={{ flex: 1, overflow: "auto", padding: "20px 24px", background: "#ffffff" }}>
       {/* Header */}
-      <div style={{ marginBottom: 20 }}>
-        <h1 style={{ fontSize: 18, fontWeight: 600, color: "var(--text)", marginBottom: 4 }}>Dashboard</h1>
-        <div style={{ fontSize: 12, color: "var(--muted)" }}>
-          Project: {MOCK_PROJECT.name}  ·  {MOCK_PROJECT.device}  ·  Last fitted 2 min ago
+      <div style={{ display: "flex", alignItems: "center", marginBottom: 20 }}>
+        <div style={{ flex: 1 }}>
+          <h1 style={{ fontSize: 18, fontWeight: 600, color: "#2c2c2c", marginBottom: 4 }}>
+            Dashboard
+          </h1>
+          <div style={{ fontSize: 12, color: "#6b7280" }}>
+            Project: {dataset?.device_info?.part_number || "—"}  ·  {dataset?.device_info?.package || ""}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <Badge variant={backendRunning ? "success" : "error"}>
+            {backendRunning ? "● Backend OK" : "● Backend Down"}
+          </Badge>
+          <button
+            onClick={refreshBackend}
+            style={{
+              background: "transparent", border: "1px solid #e5e5e5",
+              padding: "4px 10px", borderRadius: 6, cursor: "pointer",
+              display: "flex", alignItems: "center", gap: 4, fontSize: 12,
+            }}
+          >
+            <RefreshCw size={12} /> Refresh
+          </button>
         </div>
       </div>
 
-      {/* Key metrics */}
+      {/* Key Metrics */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 20 }}>
         <MetricCard
-          icon={<Activity size={14} color="var(--primary)" />}
+          icon={<Activity size={14} color="#0d99ff" />}
           label="Overall RMS"
-          value="2.35%"
-          trend="↓ 0.12"
-          trendUp={false}
-          color="var(--success)"
+          value={fitResult ? fitResult.total_rms.toFixed(3) : "—"}
+          color={fitResult?.success ? "#14ae5c" : "#6b7280"}
         />
         <MetricCard
-          icon={<FileText size={14} color="var(--primary)" />}
-          label="Curves"
-          value="5"
-          sub="139 + 43 + 101 + 50 pts"
-          color="var(--text)"
+          icon={<FileText size={14} color="#0d99ff" />}
+          label="Stages Done"
+          value={`${stages} / 6`}
+          color="#2c2c2c"
         />
         <MetricCard
-          icon={<Cpu size={14} color="var(--primary)" />}
+          icon={<Cpu size={14} color="#0d99ff" />}
           label="BSIM3 Params"
-          value="49"
-          sub="6 stages · 5 done"
-          color="var(--text)"
+          value={`${fittedParams} / ${totalParams}`}
+          sub={totalParams ? `${totalParams} total` : ""}
+          color="#2c2c2c"
         />
         <MetricCard
-          icon={<Clock size={14} color="var(--primary)" />}
-          label="Last Fit"
-          value="8.2s"
-          sub="25 iterations"
-          color="var(--text)"
+          icon={<Zap size={14} color="#0d99ff" />}
+          label="Project ID"
+          value={projectId ? projectId.slice(0, 8) : "—"}
+          sub={projectId ? "loaded" : "no project"}
+          color="#2c2c2c"
         />
       </div>
 
-      {/* Two columns */}
-      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 12, marginBottom: 20 }}>
-        {/* Device info */}
+      {/* Project Info Card */}
+      {dataset && (
         <Card>
-          <CardHeader
-            title="Device Information"
-            subtitle={MOCK_PROJECT.device}
-            action={<Badge variant="primary">100V N-Ch SGT</Badge>}
-          />
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 24px" }}>
-            <InfoRow label="Part Number" value={MOCK_PROJECT.name} />
-            <InfoRow label="Package" value={MOCK_PROJECT.package} />
-            <InfoRow label="BVDSS" value={`${MOCK_PROJECT.bvdss} V`} />
-            <InfoRow label="ID Rated" value={`${MOCK_PROJECT.id_a} A`} />
-            <InfoRow label="RDSon (typ)" value={`${MOCK_PROJECT.rdson_mohm} mΩ`} />
-            <InfoRow label="Vth (typ)" value={`${MOCK_PROJECT.vth_v} V`} />
-            <InfoRow label="Lot" value={MOCK_PROJECT.lot} useMono />
-            <InfoRow label="Test Date" value={MOCK_PROJECT.test_date} />
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 24 }}>
+            <div>
+              <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 6 }}>DEVICE</div>
+              <Row label="Part" value={dataset.device_info.part_number} />
+              <Row label="Package" value={dataset.device_info.package} />
+              <Row label="BVdss" value={`${dataset.device_info.bvdss_v} V`} />
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 6 }}>RATINGS</div>
+              <Row label="RDSon max" value={`${dataset.device_info.rdson_max_mohm} mΩ`} />
+              <Row label="Id rated" value={`${dataset.device_info.id_rated_a} A`} />
+              <Row label="Vth typ" value={`${dataset.device_info.vth_typ_v} V`} />
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 6 }}>KEY PARAMS</div>
+              <Row label="Vth25" value={`${dataset.key_params.vth_25c_v} V`} />
+              <Row label="RDSon@10V" value={`${dataset.key_params.rdson_25c_10v_ohm * 1e3} mΩ`} />
+              <Row label="Qg@20V" value={`${dataset.key_params.qg_on_20v_nc} nC`} />
+              <Row label="Ciss@25V" value={`${dataset.key_params.ciss_25v_pf} pF`} />
+            </div>
           </div>
         </Card>
+      )}
 
-        {/* Key SPICE params */}
+      {/* No project */}
+      {!projectId && (
         <Card>
-          <CardHeader title="Key SPICE Parameters" subtitle="From datasheet" />
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            <ParamRow name="Qg @ 20V" value="153.99 nC" />
-            <ParamRow name="Qgd" value="15.87 nC" />
-            <ParamRow name="Vgs(pl)" value="4.87 V" />
-            <ParamRow name="Ciss @ 25V" value="13.12 nF" />
-            <ParamRow name="Coss @ 25V" value="4.75 nF" />
-            <ParamRow name="Crss @ 25V" value="174 pF" />
-            <ParamRow name="dVth/dT" value="-9.32 mV/°C" useMono />
+          <div style={{ textAlign: "center", padding: 32, color: "#6b7280" }}>
+            <FileText size={32} style={{ marginBottom: 8, opacity: 0.3 }} />
+            <div style={{ fontSize: 13 }}>No project loaded.</div>
+            <div style={{ fontSize: 11, marginTop: 4 }}>
+              Open <b>Data Browser</b> to load a SPICE dataset.
+            </div>
           </div>
         </Card>
-      </div>
-
-      {/* Recent activity */}
-      <Card>
-        <CardHeader title="Recent Activity" />
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <ActivityRow
-            time="14:22:05"
-            icon={<Zap size={11} color="var(--success)" />}
-            text="Stage 5 — Output Resistance converged (iter=189, RMSE=4.73%)"
-          />
-          <ActivityRow
-            time="14:21:38"
-            icon={<Zap size={11} color="var(--success)" />}
-            text="Stage 4 — Saturation Velocity converged (iter=134, RMSE=3.11%)"
-          />
-          <ActivityRow
-            time="14:15:22"
-            icon={<TrendingUp size={11} color="var(--primary)" />}
-            text="Data cleaning complete — 527 outliers removed"
-          />
-          <ActivityRow
-            time="14:10:33"
-            icon={<Zap size={11} color="var(--success)" />}
-            text="Stage 1 — Threshold Voltage converged (iter=48, RMSE=0.82%)"
-          />
-          <ActivityRow
-            time="14:08:01"
-            icon={<Activity size={11} color="var(--muted)" />}
-            text="SpiceBuilder v0.1.0 started"
-          />
-        </div>
-      </Card>
+      )}
     </div>
   );
 }
 
-function MetricCard({
-  icon, label, value, sub, trend, trendUp, color,
-}: {
-  icon: React.ReactNode; label: string; value: string; sub?: string;
-  trend?: string; trendUp?: boolean; color: string;
+function MetricCard({ icon, label, value, sub, color }: {
+  icon: React.ReactNode; label: string; value: string; sub?: string; color: string;
 }) {
   return (
-    <Card>
-      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+    <div style={{
+      background: "#fafafa", border: "1px solid #e5e5e5",
+      borderRadius: 8, padding: "12px 14px",
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
         {icon}
-        <span style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>{label}</span>
+        <span style={{ fontSize: 11, color: "#6b7280" }}>{label}</span>
       </div>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-        <span style={{ fontSize: 22, fontWeight: 700, color, fontFamily: "'JetBrains Mono', Consolas, monospace" }}>{value}</span>
-        {trend && (
-          <span style={{ fontSize: 11, color: trendUp ? "var(--success)" : "var(--error)" }}>
-            {trendUp ? "↑" : "↓"} {trend}
-          </span>
-        )}
-      </div>
-      {sub && <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 4 }}>{sub}</div>}
-    </Card>
-  );
-}
-
-function InfoRow({ label, value, useMono }: { label: string; value: string; useMono?: boolean }) {
-  return (
-    <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: "1px solid var(--border)" }}>
-      <span style={{ fontSize: 11, color: "var(--muted)" }}>{label}</span>
-      <span
-        style={{
-          fontSize: 12,
-          color: "var(--text)",
-          fontFamily: useMono ? "'JetBrains Mono', Consolas, monospace" : "'Inter', 'Segoe UI', system-ui, sans-serif",
-        }}
-      >
-        {value}
-      </span>
+      <div style={{ fontSize: 22, fontWeight: 700, color }}>{value}</div>
+      {sub && <div style={{ fontSize: 10, color: "#9ca3af", marginTop: 2 }}>{sub}</div>}
     </div>
   );
 }
 
-function ParamRow({ name, value }: { name: string; value: string; useMono?: boolean }) {
+function Row({ label, value }: { label: string; value: string }) {
   return (
-    <div style={{ display: "flex", justifyContent: "space-between", padding: "3px 0" }}>
-      <span style={{ fontSize: 12, color: "var(--muted)" }}>{name}</span>
-      <span style={{ fontSize: 12, color: "var(--text)", fontFamily: "'JetBrains Mono', Consolas, monospace" }}>{value}</span>
-    </div>
-  );
-}
-
-function ActivityRow({ time, icon, text }: { time: string; icon: React.ReactNode; text: string }) {
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "4px 0" }}>
-      <span style={{ fontSize: 10, color: "var(--muted)", fontFamily: "'JetBrains Mono', Consolas, monospace", minWidth: 60 }}>{time}</span>
-      {icon}
-      <span style={{ fontSize: 12, color: "var(--text)" }}>{text}</span>
+    <div style={{
+      display: "flex", justifyContent: "space-between",
+      padding: "3px 0", fontSize: 12,
+    }}>
+      <span style={{ color: "#6b7280" }}>{label}</span>
+      <span style={{ color: "#2c2c2c", fontFamily: "ui-monospace, monospace" }}>{value}</span>
     </div>
   );
 }
