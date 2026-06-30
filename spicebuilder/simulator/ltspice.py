@@ -11,6 +11,7 @@ LTspice XVII backend - subprocess 封装。
 - 支持 .log 和 .raw 解析
 """
 from __future__ import annotations
+import atexit
 import os
 import shutil
 import subprocess
@@ -83,6 +84,15 @@ class LTspiceBackend:
                 "下载地址: https://www.analog.com/en/design-center/design-tools-and-calculators/ltspice-simulator.html"
             )
         self.cleanup = cleanup
+        # Tracks tmpdirs explicitly retained by the caller (cleanup=False).
+        # These are still wiped on interpreter shutdown so the process never
+        # exits with leaked temp directories.
+        self._kept_tmpdirs: list[str] = []
+        try:
+            atexit.register(self._cleanup_kept_tmpdirs)
+        except Exception:
+            # atexit must succeed in normal CPython; defensive.
+            pass
 
     def run_netlist_text(self,
                          netlist: str,
@@ -112,14 +122,31 @@ class LTspiceBackend:
 
         result = self.run(netlist_path, timeout_s=timeout_s)
 
-        # 决定是否清理
+        # Decide whether to clean up.  When caller asks to keep the tmpdir
+        # (e.g. to retain .raw for later parsing) we still register it for
+        # atexit cleanup so it does not leak across the process lifetime.
         should_cleanup = cleanup if cleanup is not None else self.cleanup
         if should_cleanup and output_dir is None:
             try:
                 shutil.rmtree(tmpdir)
             except OSError:
                 pass
+        else:
+            self._kept_tmpdirs.append(str(tmpdir))
         return result
+
+    def _cleanup_kept_tmpdirs(self) -> None:
+        """Wipe every tmpdir the caller asked to keep.
+
+        Registered with atexit in __init__ so the process never exits with
+        leftover /tmp/spicebuilder_* directories.
+        """
+        for d in self._kept_tmpdirs:
+            try:
+                shutil.rmtree(d, ignore_errors=True)
+            except Exception:
+                pass
+        self._kept_tmpdirs.clear()
 
     def run(self,
             netlist_path: Path,
