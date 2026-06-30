@@ -2,6 +2,7 @@
 from datetime import datetime
 from typing import Optional
 import asyncio
+import os
 import uuid
 from pathlib import Path
 
@@ -45,8 +46,17 @@ def health():
 
 @router.post("/projects/load", response_model=LoadProjectResponse)
 def load_project(req: LoadProjectRequest):
+    # Validate and normalize the user-supplied path.
+    # This is defense against path traversal, non-existent files, and
+    # wrong extension.  The API listens on 127.0.0.1 only so risk is
+    # limited, but the Tauri/IPC surface still benefits.
+    excel_path = Path(req.excel_path).resolve()
+    if not excel_path.is_file():
+        raise HTTPException(404, f"Excel file not found: {req.excel_path}")
+    if excel_path.suffix.lower() != ".xlsx":
+        raise HTTPException(400, f"Expected .xlsx extension, got: {excel_path.suffix}")
     try:
-        ds = load_sdh_excel(req.excel_path)
+        ds = load_sdh_excel(str(excel_path))
     except FileNotFoundError:
         raise HTTPException(404, f"Excel file not found: {req.excel_path}")
     except Exception as e:
@@ -264,15 +274,24 @@ def export_project(project_id: str, req: ExportRequest):
     if not project:
         raise HTTPException(404, "Project not found")
 
+    # Validate output_path: must end with .lib and parent dir must exist.
+    # This prevents writing to arbitrary locations and catches typos early.
+    out_path = Path(req.output_path).resolve()
+    if out_path.suffix.lower() != ".lib":
+        raise HTTPException(400, f"Expected .lib extension, got: {out_path.suffix}")
+    if not out_path.parent.is_dir():
+        raise HTTPException(400, f"Output directory does not exist: {out_path.parent}")
+    out_path_str = str(out_path)
+
     exporter = LibExporter(part_number=project.dataset.device_info.part_number)
     try:
         if req.format.upper() == "A":
-            path = exporter.export_bsim3(project.model, req.output_path)
+            path = exporter.export_bsim3(project.model, out_path_str)
         else:
             # 使用短名作为 subckt_name，方便调用
             short_name = "SDH10N2P1" if "SDH10N2P1" in project.name else project.name
             path = exporter.export_subckt(
-                project.model, req.output_path,
+                project.model, out_path_str,
                 subckt_name=short_name,
                 rg_ohm=req.rg_ohm,
                 rd_ohm=req.rd_ohm,
