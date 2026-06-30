@@ -16,6 +16,7 @@ loader_sdh.py
   - SPICE_Params          关键 SPICE 参数 (45 行, 推 BSIM3 初值用)
 """
 from __future__ import annotations
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -96,22 +97,38 @@ class SpiceKeyParams:
 
 
 def _to_float(v) -> Optional[float]:
+    """Parse Excel cell into float, tolerant of unit suffixes.
+
+    Handles:
+      - Empty / error sentinels (NaN, N/A, #N/A, #REF!, em-dash)
+      - SI prefixes (m-Omega / mOhm -> e-3, u-Omega / uOhm -> e-6)
+      - Charge / capacitance units (nC -> e-9, pF -> e-12)
+      - Trailing temperature (\u00b0C) and units (V/A/W/S/Omega)
+      - Leading +/- / ~ error prefix in any supported encoding
+    """
     if v is None:
         return None
     if isinstance(v, (int, float)):
         return float(v)
     s = str(v).strip()
-    if s in ('', 'NaN', 'N/A', '#N/A', '#REF!', '—', '-', '��'):
+    # Empty / error sentinels
+    if s in ("", "NaN", "N/A", "#N/A", "#REF!", "\u2014", "-"):
         return None
-    # 处理 ± 符号
-    if s.startswith('��') or s.startswith('±') or s.startswith('~'):
-        s = s[1:]
-    # 处理 'mΩ' (可能多种编码)
-    s = s.replace('m��', 'e-3').replace('mΩ', 'e-3').replace('mOhm', 'e-3')
-    s = s.replace('u��', 'e-6').replace('uΩ', 'e-6').replace('uOhm', 'e-6')
-    s = s.replace('nC', 'e-9').replace('pF', 'e-12')
-    s = s.replace('��C', '').replace('°C', '').replace('C', '')
-    s = s.replace('V', '').replace('A', '').replace('W', '').replace('S', '').replace('Ω', '').replace('��', '')
+    # Strip leading +/- / ~ error prefix
+    PREFIX_CHARS = ("\xa1\xa1", "\xa1", "\u00b1", "\u00a1", "~")
+    while s and any(s.startswith(p) for p in PREFIX_CHARS):
+        for p in PREFIX_CHARS:
+            if s.startswith(p):
+                s = s[len(p):].lstrip()
+                break
+    # SI prefix -> scientific notation
+    s = re.sub(r"(?i)\bm(\u2126|Ohm)\b", "e-3", s)
+    s = re.sub(r"(?i)\bu(\u2126|Ohm)\b", "e-6", s)
+    s = re.sub(r"(?i)\bnC\b",             "e-9",  s)
+    s = re.sub(r"(?i)\bpF\b",             "e-12", s)
+    # Trailing temperature / units
+    s = re.sub(r"\u00b0C\s*$", "", s)
+    s = re.sub(r"[VAWS\u2126]+\s*$", "", s)
     s = s.strip()
     try:
         return float(s)
