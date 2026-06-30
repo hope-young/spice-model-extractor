@@ -26,6 +26,10 @@ class Task:
     error: str = ""
     created_at: str = ""
     project_id: str = ""
+    # Strong reference to the asyncio.Task so it isn't GC'd mid-run.
+    # Annotated as string to avoid forcing an asyncio import order;
+    # never read in a hot path.
+    asyncio_task: "Optional[asyncio.Task]" = None
 
 
 class State:

@@ -186,7 +186,7 @@ async def start_fit(project_id: str, req: FitRequest):
         raise HTTPException(404, "Project not found")
 
     task_id = str(uuid.uuid4())
-    state.tasks[task_id] = Task(
+    task = state.tasks[task_id] = Task(
         id=task_id,
         type="fit",
         status="queued",
@@ -194,8 +194,9 @@ async def start_fit(project_id: str, req: FitRequest):
         created_at=datetime.now().isoformat(),
     )
 
-    # 调度后台任务
-    asyncio.create_task(_fit_task_wrapper(project_id, req, task_id))
+    # Schedule background task and hold a strong reference so it isn't
+    # garbage-collected mid-run (Python cancels unreferenced Tasks).
+    task.asyncio_task = asyncio.create_task(_fit_task_wrapper(project_id, req, task_id))
 
     return FitResponse(
         task_id=task_id,
