@@ -54,7 +54,7 @@ pub fn run() {
             // 窗口关闭时杀掉 Python 子进程
             if let tauri::WindowEvent::CloseRequested { .. } = event {
                 if let Some(state) = window.app_handle().try_state::<PythonBackendState>() {
-                    if let Some(mut child) = state.child.lock().unwrap().take() {
+                    if let Some(mut child) = state.child.lock().unwrap_or_else(|e| e.into_inner()).take() {
                         let _ = child.start_kill();
                         log::info!("Python backend killed on window close");
                     }

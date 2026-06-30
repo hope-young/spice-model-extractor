@@ -76,7 +76,7 @@ pub async fn start_python_backend(
 ) -> Result<String, String> {
     // 已经在跑？
     {
-        let running = state.running.lock().unwrap();
+        let running = state.running.lock().unwrap_or_else(|e| e.into_inner());
         if *running {
             return Ok(format!("already running at {}", PYTHON_URL));
         }
@@ -146,11 +146,11 @@ pub async fn start_python_backend(
 
     // 存状态
     {
-        let mut child_lock = state.child.lock().unwrap();
+        let mut child_lock = state.child.lock().unwrap_or_else(|e| e.into_inner());
         *child_lock = Some(child);
-        let mut running = state.running.lock().unwrap();
+        let mut running = state.running.lock().unwrap_or_else(|e| e.into_inner());
         *running = true;
-        let mut pid_lock = state.pid.lock().unwrap();
+        let mut pid_lock = state.pid.lock().unwrap_or_else(|e| e.into_inner());
         *pid_lock = pid;
     }
 
@@ -187,16 +187,25 @@ pub async fn start_python_backend(
 pub async fn stop_python_backend(
     state: State<'_, PythonBackendState>,
 ) -> Result<(), String> {
-    let mut child_lock = state.child.lock().unwrap();
+    let mut child_lock = state.child.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(mut child) = child_lock.take() {
         child
             .start_kill()
             .map_err(|e| format!("Failed to kill process: {}", e))?;
-        log::info!("Python backend killed");
+        // Reap the child to avoid leaving zombie processes on Linux
+        // and orphaned handles on Windows.  Wait with a short timeout
+        // so we do not block indefinitely on a misbehaving child.
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            child.wait(),
+        ).await {
+            Ok(_) => log::info!("Python backend killed and reaped"),
+            Err(_) => log::warn!("Python backend kill timed out during wait"),
+        }
     }
-    let mut running = state.running.lock().unwrap();
+    let mut running = state.running.lock().unwrap_or_else(|e| e.into_inner());
     *running = false;
-    let mut pid = state.pid.lock().unwrap();
+    let mut pid = state.pid.lock().unwrap_or_else(|e| e.into_inner());
     *pid = None;
     Ok(())
 }
@@ -206,8 +215,8 @@ pub async fn stop_python_backend(
 pub async fn check_backend(
     state: State<'_, PythonBackendState>,
 ) -> Result<HealthStatus, String> {
-    let running = *state.running.lock().unwrap();
-    let pid = *state.pid.lock().unwrap();
+    let running = *state.running.lock().unwrap_or_else(|e| e.into_inner());
+    let pid = *state.pid.lock().unwrap_or_else(|e| e.into_inner());
     let health_url = format!("{}/api/health", PYTHON_URL);
 
     let client = reqwest::Client::builder()
