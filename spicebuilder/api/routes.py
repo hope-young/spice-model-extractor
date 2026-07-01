@@ -176,6 +176,7 @@ def _run_fit_sync(project: Project, req: FitRequest, task: Task):
         verbose=False,
         progress_callback=_make_progress_callback(task),
         simulator=simulator,
+        stages=list(req.stages) if req.stages else None,
     )
 
     result = engine.run(opt)
