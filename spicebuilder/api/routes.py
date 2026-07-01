@@ -125,6 +125,25 @@ def get_project(project_id: str):
 #  Fitting - run + task tracking
 # ============================================================
 
+def _make_progress_callback(task: "Task") -> "callable":
+    """Return a callback that maps (stage, loop) coordinates to task.progress.
+
+    Granularity: 0.05 .. 0.95 evenly split across (total_stages * max_loops)
+    stage executions.  Each stage completion bumps progress by exactly one slot.
+    """
+    # Closure captures task; reads total_stages / max_loops from the first
+    # callback invocation (subsequent calls ignore different totals).
+    def _cb(stage_name, stage_idx, total_stages, status, loop_idx, max_loops):
+        if status != "complete":
+            return
+        total_steps = max(1, total_stages * max_loops)
+        current = (loop_idx * total_stages) + stage_idx + 1
+        frac = 0.05 + 0.90 * (current / total_steps)
+        # Clamp in case of weird call order
+        task.progress = round(min(0.95, frac), 3)
+    return _cb
+
+
 def _run_fit_sync(project: Project, req: FitRequest, task: Task):
     """CPU-bound fit in sync context (run in executor)."""
     ds = project.dataset
@@ -137,19 +156,19 @@ def _run_fit_sync(project: Project, req: FitRequest, task: Task):
     opt.set_eps3(req.optimizer.eps3)
     opt.set_max_iter(req.optimizer.max_iter)
 
-    # Engine
-    task.progress = 0.1
+    # Engine with stage-level progress reporting.
+    task.progress = 0.05
     engine = build_sgt_engine(
         dataset=ds, model=model, optimizer=opt,
         error_threshold=req.error_threshold,
         max_loops=req.max_loops,
         verbose=False,
+        progress_callback=_make_progress_callback(task),
     )
 
-    task.progress = 0.3
     result = engine.run(opt)
 
-    task.progress = 0.9
+    task.progress = 1.0
     task.result = {
         "success": result.success,
         "total_rms": float(result.total_rms),

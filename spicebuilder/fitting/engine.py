@@ -34,10 +34,16 @@ class Engine:
     def __init__(self,
                  stages: list[Stage],
                  error_threshold: float = 0.5,
-                 max_loops: int = 3):
+                 max_loops: int = 3,
+                 progress_callback: Optional[callable] = None):
         self.stages = stages
         self.error_threshold = error_threshold
         self.max_loops = max_loops
+        # Optional callback notified after each stage completes.
+        # Signature: cb(stage_name, stage_idx, total_stages, status, loop_idx, max_loops)
+        # `status` is always "complete" for now (room to add "start" later).
+        # Callbacks that raise are swallowed: a buggy reporter must not break the fit.
+        self.progress_callback = progress_callback
 
     def run(self, optimizer: Optimizer) -> EngineResult:
         """跑整个 pipeline
@@ -47,17 +53,27 @@ class Engine:
         """
         all_stage_results = []
         prev_total_rms = float('inf')
+        total_stages = len(self.stages)
 
         for loop_idx in range(self.max_loops):
             loop_results = []
             total_rms_sq = 0.0
             n_points = 0
 
-            for stage in self.stages:
+            for stage_idx, stage in enumerate(self.stages):
                 result = stage.run(optimizer)
                 loop_results.append(result)
                 total_rms_sq += result.rms ** 2
                 n_points += 1
+                # Report progress after each stage completes.
+                if self.progress_callback is not None:
+                    try:
+                        self.progress_callback(
+                            stage.name, stage_idx, total_stages,
+                            "complete", loop_idx, self.max_loops,
+                        )
+                    except Exception:
+                        pass
 
             loop_rms = float(np.sqrt(total_rms_sq / max(1, n_points)))
             all_stage_results.extend(loop_results)

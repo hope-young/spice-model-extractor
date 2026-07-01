@@ -44,7 +44,8 @@ def build_sgt_engine(dataset: SpiceDataSet,
                       error_threshold: float = 0.5,
                       max_loops: int = 3,
                       verbose: bool = True,
-                      simulator=None) -> Engine:
+                      simulator=None,
+                      progress_callback=None) -> Engine:
     """构建 Si SGT 6 阶段提取 pipeline
 
     Args:
@@ -55,6 +56,7 @@ def build_sgt_engine(dataset: SpiceDataSet,
         max_loops: 最大外层循环次数
         verbose: 是否打印阶段信息
         simulator: LTspiceEvaluator 或 None (None=用简化公式)
+        progress_callback: Optional callable forwarded to Engine.  See engine.py.
     """
     stages = []
 
@@ -171,7 +173,12 @@ def build_sgt_engine(dataset: SpiceDataSet,
     if verbose:
         print(f"S6: params={s6.param_names}, data={sum(s.n_points for s in s6_sims)} pts")
 
-    return Engine(stages, error_threshold=error_threshold, max_loops=max_loops)
+    return Engine(
+        stages,
+        error_threshold=error_threshold,
+        max_loops=max_loops,
+        progress_callback=progress_callback,
+    )
 
 
 def run_sgt_6stage(dataset: SpiceDataSet,
