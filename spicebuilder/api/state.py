@@ -14,6 +14,12 @@ class Project:
     model: object    # BSIM3Model
     simdata_cache: Dict = field(default_factory=dict)
     created_at: str = ""
+    # Persisted fitted curves from the most recent fit run.  Keys are the
+    # route names used by GET /api/projects/{id}/curves/{type} (idvg_5v,
+    # idvd, cv_vds_ciss, ...); values are lists of fit arrays (one per
+    # source SimData in the original dataset).  Empty / missing keys
+    # just mean "no fit has been run on this project yet".
+    cached_fits: Dict[str, list] = field(default_factory=dict)
 
 
 @dataclass

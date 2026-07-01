@@ -17,6 +17,57 @@ from .models import (
 
 from spicebuilder.data.loader_sdh import load_sdh_excel
 from spicebuilder.data.simdata import SimData
+
+
+def _populate_fit_cache(project, engine) -> None:
+    """Persist fitted curves onto `project.cached_fits` keyed by route name.
+
+    SimData built inside `SimData.from_xxx(...)` is a *fresh* object and
+    therefore has no .fit values when later fetched via /curves.  Here we
+    walk the engine's stages (whose SimData is the actual fitted object)
+    and surface the fit arrays back onto the project so subsequent
+    GET /api/projects/{id}/curves/{type} calls can include "fit".
+
+    Keyed by the same names used by get_curve():
+        idvg_5v, idvg_05v, idvd, cv_vds_ciss, cv_vds_coss,
+        cv_vds_crss, body_diode
+    """
+    cache: dict[str, list] = {}
+
+    for stage in engine.stages:
+        for sd in stage.simdata:
+            ct = sd.curve_type  # IdVg / IdVd / CvVds / IsVsd / Qg
+            iv = sd.metadata.get("vds_v") or sd.metadata.get("vgs_v")
+            T = sd.metadata.get("temperature_c", 25)
+            fit_list = sd.fit.tolist() if sd.fit is not None else None
+            if ct == "IdVg":
+                vds = sd.metadata.get("vds_v", 0.5)
+                if vds == 5.0:
+                    key = "idvg_5v"
+                elif vds == 0.5 and T != 150:
+                    key = "idvg_05v"
+                else:
+                    continue
+            elif ct == "IdVd":
+                key = "idvd"
+            elif ct == "CvVds":
+                cap = sd.metadata.get("cap_type")  # 'ciss' / 'coss' / 'crss'
+                if cap == "ciss":
+                    key = "cv_vds_ciss"
+                elif cap == "coss":
+                    key = "cv_vds_coss"
+                elif cap == "crss":
+                    key = "cv_vds_crss"
+                else:
+                    continue
+            elif ct == "IsVsd":
+                key = "body_diode"
+            else:
+                continue
+            cache.setdefault(key, []).append(fit_list)
+
+    project.cached_fits = cache
+
 from spicebuilder.models.bsim3 import BSIM3Model, PARAM_SPECS
 from spicebuilder.models.init_values import init_from_key_params
 from spicebuilder.fitting.optimizer import Optimizer
@@ -180,6 +231,11 @@ def _run_fit_sync(project: Project, req: FitRequest, task: Task):
     )
 
     result = engine.run(opt)
+
+    # Persist fitted curves back onto the project so subsequent
+    # GET /api/projects/{id}/curves/{type} can surface 'fit' along
+    # with the raw ivar / dvar data.
+    _populate_fit_cache(project, engine)
 
     task.progress = 1.0
     task.result = {
@@ -388,15 +444,29 @@ def get_curve(project_id: str, curve_type: str, vgs_v: Optional[float] = None):
     except Exception as e:
         raise HTTPException(400, f"Curve error: {e}")
 
+    # The freshly built SimData has no .fit (we didn't run the optimizer
+    # on it); fit values live in project.cached_fits[curve_type] populated
+    # by _populate_fit_cache() at the end of _run_fit_sync.  We pick the
+    # first non-None entry; reporting tools can re-aggregate as needed.
+    cached = getattr(project, "cached_fits", None) or {}
+    fit_list: list | None = None
+    for entry in cached.get(curve_type, []):
+        if entry is not None:
+            fit_list = entry
+            break
+
     return CurveResponse(
         name=sim.name,
         curve_type=sim.curve_type,
         data={
             "ivar": sim.ivar.tolist(),
             "dvar": sim.dvar.tolist(),
+            "fit": fit_list,
         },
-        metadata={k: (v if isinstance(v, (int, float, str, bool, list)) else str(v))
-                  for k, v in sim.metadata.items()},
+        metadata={
+            k: (v if isinstance(v, (int, float, str, bool, list)) else str(v))
+            for k, v in sim.metadata.items()
+        } | {"has_fit": fit_list is not None},
     )
 
 

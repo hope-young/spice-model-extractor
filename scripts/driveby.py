@@ -25,7 +25,15 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any, Dict, List
+
+# Ensure the repo root is on sys.path so `import spicebuilder` works
+# even when this script is invoked as `python scripts/driveby.py` from
+# outside a `pip install -e .` venv.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 DEFAULT_BASE = "http://127.0.0.1:8000"
 DEFAULT_STAGES = ["S1", "S2", "S3", "S4", "S5", "S6"]
@@ -89,6 +97,8 @@ def main() -> int:
                    help="Seconds between status polls")
     p.add_argument("--timeout", type=float, default=600.0,
                    help="Max wait for fit completion (seconds)")
+    p.add_argument("--report-xlsx", default=None,
+                   help="If set, write a multi-sheet Excel fit report to this path (after .lib export).")
     args = p.parse_args()
 
     base = args.base.rstrip("/")
@@ -157,7 +167,71 @@ def main() -> int:
                                 "include_diode": True,
                             })
     print(f"  written: {exp_resp['file_path']}  ({exp_resp['n_bytes']} bytes)")
+
+    # 5) Optional Excel report
+    if args.report_xlsx:
+        _write_excel_report(
+            base=base, project_id=project_id,
+            device_info=resp["device_info"], key_params=resp["key_params"],
+            curve_counts=resp["curve_counts"], fit_result=fit,
+            out_xlsx=Path(args.report_xlsx),
+        )
     return 0
+
+
+def _write_excel_report(
+    *, base: str, project_id: str,
+    device_info: dict, key_params: dict, curve_counts: dict,
+    fit_result: dict, out_xlsx: Path,
+) -> None:
+    """Pull curve data from the backend and write a multi-sheet Excel report."""
+    try:
+        from spicebuilder.report import build_report
+    except ImportError as e:
+        print(f"[report] cannot import spicebuilder.report: {e}", file=sys.stderr)
+        print("[report] Either `pip install -e .` in the SpiceBuilder repo, or run",
+              file=sys.stderr)
+        print("[report] driveby.py from a shell where the repo root is on PYTHONPATH.",
+              file=sys.stderr)
+        return
+
+    print(f"\n[report] fetching curves → {out_xlsx}")
+    curve_specs = [
+        ("idvg_5v",     "idvg_5v"),
+        ("idvg_05v",    "idvg_05v"),
+        ("idvd",        "idvd"),
+        ("cv_ciss",     "cv_vds_ciss"),
+        ("cv_coss",     "cv_vds_coss"),
+        ("cv_crss",     "cv_vds_crss"),
+        ("body_diode",  "body_diode"),
+    ]
+    curves: dict = {}
+    for local_key, route_key in curve_specs:
+        try:
+            payload = {"curve_type": route_key}
+            # body_diode / idvd sometimes need vgs_v; not required here
+            r = http_request("GET", f"{base}/api/projects/{project_id}/curves/{route_key}")
+            curves[local_key] = {
+                "ivar": r["data"].get("ivar", []) or [],
+                "dvar": r["data"].get("dvar", []) or [],
+                "fit":  r["data"].get("fit"),
+            }
+            n = len(curves[local_key]["ivar"])
+            print(f"  {local_key}: {n} points"
+                  + (f" (fit present)" if curves[local_key]["fit"] is not None
+                     else f" (no fit — run fit first)"))
+        except urllib.error.HTTPError as e:
+            print(f"  {local_key}: HTTP {e.code} (skipping)", file=sys.stderr)
+
+    build_report(
+        out_path=out_xlsx,
+        device_info=device_info,
+        key_params=key_params,
+        fit_result=fit_result,
+        curve_counts=curve_counts,
+        curves=curves,
+    )
+    print(f"  Excel written: {out_xlsx}")
 
 
 if __name__ == "__main__":

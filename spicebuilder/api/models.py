@@ -130,7 +130,10 @@ class CurveResponse(BaseModel):
     """Response payload for GET /projects/{id}/curves/{type}."""
     name: str = Field(..., description="Curve family name")
     curve_type: str = Field(..., description="idvg | idvd | cv | body_diode")
-    data: Dict[str, List[float]] = Field(..., description="Sweep variable and response columns (e.g. {'vgs': [...], 'id_25c': [...]})")
+    # `data['fit']` may be None when no fit has been run on this project;
+    # other entries are always populated.  Use Optional[List[float]] so a
+    # missing fit does not 500 the endpoint.
+    data: Dict[str, Optional[List[float]]] = Field(..., description="Sweep variable, response columns, and an optional 'fit' (None if no fit has run)")
     metadata: Dict[str, Any] = Field(..., description="Optional metadata: test conditions, units, source")
 
 
