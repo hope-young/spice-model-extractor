@@ -418,33 +418,69 @@ def gen_cv_netlist(model_path: str,
                    vds_step: float = 0.5,
                    freq: float = 1e6,
                    model_name: str = "nmos1",
-                   use_subckt: bool = True) -> str:
-    """生成 C-V 扫描的 netlist (Iac + .step Vds + single-freq AC 分析)
+                   use_subckt: bool = True,
+                   cap_type: str = "ciss") -> str:
+    """生成 C-V 扫描的 netlist (3 种 cap_type 各自匹配测量)
 
-    Iac 1A AC at gate (high-Z 电流源) so it does not conflict with the
-    Vgs DC source.  `.step param Vds 0 vds_max vds_step` sweeps the
-    DC operating point.  `.ac dec 1 f f` runs AC analysis at a single
-    frequency f (1MHz by default) so the output is a clean (nVds, nVars)
-    matrix.  `.print ac V(G) I(Iac)` gives complex voltage on the gate
-    node and the injected AC current; eval_cv computes C = |I| / (omega|V|)
-    at each Vds.
+    cap_type:
+        ciss  - Iac 1A AC at gate, Rds_short 短 D 到地, 测 V(G_int)
+                C = |I|/(omega*|V(G_int)|) = Cgs + Cgd
+        coss  - Iac 1A AC at drain, Rgs_short 短 G 到地, 测 V(D_int)
+                C = |I|/(omega*|V(D_int)|) = Cgd + Cds
+        crss  - Iac 1A AC at drain, Rgs_short 短 G 到地, 测 V(D_int)
+                C = |I|/(omega*|V(D_int)|) = Cgd (only)
+
+    .step Vds 1..vds_max (skip 0; at Vds=0 the cap is fully discharged
+    and Iac has nothing to flow through).  .ac list f runs AC at a
+    single frequency f (1 MHz by default) so the output is a clean
+    (nVds, nVars) matrix instead of cross-product.
     """
     abs_path = Path(model_path).resolve()
     if use_subckt:
-        x_line = f"X1 D G 0 {model_name}"
+        x_line = f"X1 D_int G_int 0 {model_name}"
     else:
-        x_line = f"M1 D G 0 0 {model_name}"
-    return f"""* C-V scan via Iac + 1GΩ DC-bias + Vac bias on D, freq={freq:g}Hz
+        x_line = f"M1 D_int G_int 0 0 {model_name}"
+
+    if cap_type == "ciss":
+        return f"""* C-V Ciss: Iac on gate, drain shorted
 .include "{abs_path}"
 {x_line}
-Rgs_pull G 0 1G
-Iac G 0 DC 0 AC 1 sin(0 1 {freq:g})
+Rds_short D_int 0 0.001
+Rgs_pull G_int 0 1G
+Iac G_int 0 DC 0 AC 1 sin(0 1 {freq:g})
 Vac D 0 DC 1 AC 1 sin(0 1 {freq:g})
 .step param Vds 1 {vds_max} {vds_step}
 .ac list {freq:g}
-.print ac V(G) I(Iac)
+.print ac V(G_int) I(Iac)
 .end
 """
+    elif cap_type == "coss":
+        return f"""* C-V Coss: Iac on drain, gate shorted
+.include "{abs_path}"
+{x_line}
+Rgs_short G_int 0 0.001
+Rds_pull D_int 0 1G
+Iac D_int 0 DC 0 AC 1 sin(0 1 {freq:g})
+Vac D 0 DC 1 AC 1 sin(0 1 {freq:g})
+.step param Vds 1 {vds_max} {vds_step}
+.ac list {freq:g}
+.print ac V(D_int) I(Iac)
+.end
+"""
+    elif cap_type == "crss":
+        return f"""* C-V Crss: Iac on drain, gate shorted
+.include "{abs_path}"
+{x_line}
+Rgs_short G_int 0 0.001
+Iac D_int 0 DC 0 AC 1 sin(0 1 {freq:g})
+Vac D 0 DC 1 AC 1 sin(0 1 {freq:g})
+.step param Vds 1 {vds_max} {vds_step}
+.ac list {freq:g}
+.print ac V(D_int) I(Iac)
+.end
+"""
+    else:
+        raise ValueError(f"Unknown cap_type: {cap_type!r}; expected ciss|coss|crss")
 
 
 # ============================================================

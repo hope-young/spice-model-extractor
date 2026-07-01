@@ -127,7 +127,8 @@ class Stage:
                 vgs = sd.metadata.get('vgs_v', 10.0)
                 return self.simulator.eval_idvd(self.model, sd.ivar, vgs=vgs)
             elif sd.curve_type == "CvVds":
-                return self.simulator.eval_cv(self.model, sd.ivar)
+                cap = sd.metadata.get("cap_type") or "ciss"
+                return self.simulator.eval_cv(self.model, sd.ivar, cap_type=cap)
             # Diode 暂用简化 (LTspice diode 仿真另需模型)
             elif sd.curve_type == "IsVsd":
                 return self._eval_diode_simple(sd)

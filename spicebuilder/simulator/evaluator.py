@@ -189,17 +189,16 @@ class LTspiceEvaluator:
                 model: BSIM3Model,
                 vds_arr: np.ndarray,
                 freq: float = 1e6,
-                vds_max: float = 25.0) -> Optional[np.ndarray]:
-        """评估 C-V 曲线 (返回 Ciss in F; None on LTspice failure).
+                vds_max: float = 25.0,
+                cap_type: str = "ciss") -> Optional[np.ndarray]:
+        """评估 C-V 曲线 (返回 C in F; None on LTspice failure).
 
-        The 1e-12 fallback was previously feeding nonsense data into the
-        fit loop and the Excel report. We now cache None so callers see a
-        honest "fit unavailable" instead.  The fix for the underlying
-        LTspice netlist is tracked separately.
+        cap_type selects both the netlist pattern and which trace we
+        read back.  ciss -> V(G_int); coss/crss -> V(D_int).
         """
         import time
         import sys
-        key = self._param_hash(model, f"cv_f{freq}", vds_arr)
+        key = self._param_hash(model, f"cv_f{freq}_{cap_type}", vds_arr)
         if key in self.cache:
             self.stats["cache_hits"] += 1
             if self.cache[key] is None:
@@ -211,7 +210,8 @@ class LTspiceEvaluator:
         self.stats["calls"] += 1
         lib_path = self._write_lib(model)
         netlist = gen_cv_netlist(str(lib_path), vds_max=vds_max, vds_step=vds_max / 50,
-                                  freq=freq, model_name=self.subckt_name, use_subckt=True)
+                                  freq=freq, model_name=self.subckt_name, use_subckt=True,
+                                  cap_type=cap_type)
         res = self.backend.run_netlist_text(netlist, timeout_s=15, cleanup=False)
         self.stats["time"] += time.time() - t0
 
@@ -221,19 +221,21 @@ class LTspiceEvaluator:
 
         try:
             raw = self.backend.parse_raw(res.raw_path)
-            if 'V(g)' not in raw or 'I(Iac)' not in raw:
+            # LTspice returns trace names in lowercase: V(g_int), V(d_int)
+            v_trace = "V(g_int)" if cap_type == "ciss" else "V(d_int)"
+            if v_trace not in raw or 'I(Iac)' not in raw:
                 self.cache[key] = None
                 return None
-            v_g = np.asarray(raw['V(g)']['dvar'], dtype=float)   # magnitudes
-            i_iac = np.asarray(raw['I(Iac)']['dvar'], dtype=float)  # magnitudes
-            if v_g.size == 0 or i_iac.size == 0:
+            v_node = np.asarray(raw[v_trace]['dvar'], dtype=float)
+            i_iac = np.asarray(raw['I(Iac)']['dvar'], dtype=float)
+            if v_node.size == 0 or i_iac.size == 0:
                 self.cache[key] = None
                 return None
             # C = |I| / (omega * |V|).  Iac amplitude is 1 A so i_iac
-            # should be 1.0 (the cap current) and v_g is the small-signal
-            # voltage on the gate node.  Length = nVds_step.
+            # should be 1.0 (the cap current) and v_node is the small-
+            # signal voltage on the measured node.  Length = nVds_step.
             omega = 2 * np.pi * freq
-            c = i_iac / (omega * np.maximum(v_g, 1e-30))
+            c = i_iac / (omega * np.maximum(v_node, 1e-30))
             if len(c) >= len(vds_arr):
                 return c[: len(vds_arr)]
             # Pad / interpolate to vds_arr length when fewer points
