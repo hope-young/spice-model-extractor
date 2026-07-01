@@ -185,10 +185,22 @@ def _run_fit_sync(project: Project, req: FitRequest, task: Task):
     task.result = {
         "success": result.success,
         "total_rms": float(result.total_rms),
+        "r_squared": float(result.r_squared),
         "iterations": int(result.iterations),
         "message": result.message,
         "stages": [
-            {"name": sr.stage_name, "rms": float(sr.rms), "success": bool(sr.success)}
+            {
+                "name": sr.stage_name,
+                "rms": float(sr.rms),
+                # NaN-stamp means the stage had no fitted points
+                # (e.g. empty mask result). Surface as null in JSON.
+                "r_squared": (
+                    None
+                    if (sr.r_squared != sr.r_squared)  # NaN check
+                    else float(sr.r_squared)
+                ),
+                "success": bool(sr.success),
+            }
             for sr in result.stage_results
         ],
     }

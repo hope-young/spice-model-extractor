@@ -172,7 +172,7 @@ export function FittingPipeline() {
         </Card>
       )}
 
-      {/* Total RMS Banner */}
+      {/* Total RMS / R² Banner */}
       {fitResult && (
         <Card>
           <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
@@ -180,6 +180,22 @@ export function FittingPipeline() {
               <div style={{ fontSize: 11, color: C.muted, marginBottom: 2 }}>TOTAL RMS</div>
               <div style={{ fontSize: 28, fontWeight: 700, color: C.primary }}>
                 {fitResult.total_rms.toFixed(3)}
+              </div>
+              <div style={{ fontSize: 10, color: C.muted, marginTop: 1 }}>
+                log-NRMSE (lower is better)
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: C.muted, marginBottom: 2 }}>TOTAL R²</div>
+              <div style={{
+                fontSize: 28, fontWeight: 700,
+                color: (fitResult.r_squared ?? 0) >= 0.9 ? C.success
+                       : (fitResult.r_squared ?? 0) >= 0.7 ? C.warning : C.error,
+              }}>
+                {(fitResult.r_squared ?? 0).toFixed(4)}
+              </div>
+              <div style={{ fontSize: 10, color: C.muted, marginTop: 1 }}>
+                goodness of fit (1 is perfect)
               </div>
             </div>
             <div style={{ flex: 1 }}>

@@ -135,11 +135,17 @@ def main() -> int:
         print(f"\nfit FAILED: {final['error']}", file=sys.stderr)
         return 1
     fit = final["result"]
-    print(f"\n[fit] Total RMS: {fit['total_rms']:.4f}  "
-          f"iterations: {fit['iterations']}")
+    rms = fit["total_rms"]
+    r2 = fit["r_squared"]
+    # log-domain NRMSE, lower is better; R² is in [0, 1], 1 is perfect.
+    print(f"\n[fit] Total RMS  : {rms:.4f}    (log-NRMSE; lower is better)")
+    print(f"      Total R²   : {r2:.4f}    (goodness of fit; 1 is perfect)")
+    print(f"      iterations : {fit['iterations']}")
     for s in fit["stages"]:
         status = "OK" if s["success"] else "FAIL"
-        print(f"  {s['name']}: rms={s['rms']:.4f}  [{status}]")
+        sr2 = s.get("r_squared")
+        sr2_str = f"{sr2:.4f}" if isinstance(sr2, (int, float)) else "n/a"
+        print(f"  {s['name']}: rms={s['rms']:.4f}  R²={sr2_str}  [{status}]")
 
     # 4) export
     print(f"\n[export] {args.out}")

@@ -29,6 +29,9 @@ class StageResult:
     nfev: int
     fitted_params: dict[str, float] = field(default_factory=dict)
     message: str = ""
+    # Log-domain R² over this stage's fitted points only (in [0, 1]; 1 is perfect).
+    # NaN-stamped if the stage had no fitted points (e.g. mask filtered them all).
+    r_squared: float = float("nan")
 
 
 class Stage:
@@ -276,6 +279,13 @@ class Stage:
             if fit is not None:
                 sd.set_fit(fit)
 
+        # Compute stage-level log-domain R² on the same simdata points
+        # used by the residual function.  This is per-stage, so it
+        # avoids the cross-magnitude SST corruption that would happen
+        # if we pooled C-V (pF) with body-diode (A) and IdVd (A) into
+        # a single R².
+        r_squared = self._stage_r_squared()
+
         return StageResult(
             stage_name=self.name,
             success=result.success,
@@ -284,4 +294,35 @@ class Stage:
             nfev=result.nfev,
             fitted_params={p: float(v) for p, v in zip(self.param_names, result.x)},
             message=result.message,
+            r_squared=r_squared,
         )
+
+    def _stage_r_squared(self) -> float:
+        """Per-stage log-domain R² (in [0, 1]; 1 is perfect; NaN if no data).
+
+        R² = 1 - SSR / SST
+        SST is computed relative to the mean of THIS stage's points
+        only, not pooled across stages — so per-stage R² is meaningful
+        even when stage magnitudes span orders.
+        """
+        import math
+        meas_logs: list = []
+        fit_logs: list = []
+        for sd in self.simdata:
+            if sd.dvar is None or sd.fit is None:
+                continue
+            m = np.asarray(sd.dvar, dtype=float)
+            f = np.asarray(sd.fit, dtype=float)
+            mask = (m > 0) & (f > 0)
+            if mask.any():
+                meas_logs.append(np.log10(m[mask]))
+                fit_logs.append(np.log10(f[mask]))
+        if not meas_logs:
+            return float("nan")
+        m_arr = np.concatenate(meas_logs)
+        f_arr = np.concatenate(fit_logs)
+        ss_res = float(np.sum((m_arr - f_arr) ** 2))
+        ss_tot = float(np.sum((m_arr - m_arr.mean()) ** 2))
+        if ss_tot <= 0:
+            return 0.0
+        return max(0.0, 1.0 - ss_res / ss_tot)

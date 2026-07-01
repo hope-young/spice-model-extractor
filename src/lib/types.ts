@@ -114,6 +114,8 @@ export interface Stage {
 export interface FittingResult {
   success: boolean;
   total_rms: number;
+  /** Log-domain R² (coefficient of determination) in [0, 1]; 1 is perfect. */
+  r_squared: number;
   iterations: number;
   stage_results: {
     stage_name: string;
