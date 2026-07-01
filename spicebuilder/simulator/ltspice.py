@@ -13,10 +13,12 @@ LTspice XVII backend - subprocess 封装。
 from __future__ import annotations
 import atexit
 import os
+import re
 import shutil
 import subprocess
 import tempfile
-import re
+
+import numpy as np
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -246,6 +248,22 @@ class LTspiceBackend:
         """解析 .raw 波形文件（ASCII 格式）
 
         Returns: {trace_name: {ivar: ndarray, dvar: ndarray}}
+
+        Handles both real-only traces (".tran", ".dc") and complex
+        traces (".ac").  For complex traces, each value is the
+        pair "real,imag"; we store the magnitude (sqrt(re^2+im^2)) so
+        downstream consumers (e.g. eval_cv's C = |I|/(2*pi*f*|V|)) can
+        read a single float per datapoint.
+
+        The layout in the file (when Flags include "complex"):
+            0  v0_re, v0_im
+                v1_re, v1_im
+                ...
+                v_(N-1)_re, v_(N-1)_im
+            1  v0_re, v0_im
+                ...
+        i.e. the first column is the sweep variable, and each subsequent
+        column-pair is one of the N-1 traces.
         """
         raw_path = Path(raw_path)
         if not raw_path.exists():
@@ -253,23 +271,7 @@ class LTspiceBackend:
         text = raw_path.read_text(encoding="utf-8", errors="ignore")
         lines = text.splitlines()
 
-        # 找到 header
-        # LTspice ASCII .raw 格式:
-        #   Title: ...
-        #   Date: ...
-        #   ...
-        #   Flags: ...
-        #   No. Variables: N
-        #   No. Points: M
-        #   Variables:
-        #         0  time  s
-        #         1  V(out)  V
-        #         ...
-        #   Values:
-        #         0  ...
-        #         ...
-        #         <M-1>  ...
-
+        is_complex = False
         n_vars = 0
         n_points = 0
         var_names = []
@@ -280,8 +282,9 @@ class LTspiceBackend:
                 n_vars = int(line.split(":")[1].strip())
             elif line.startswith("No. Points:"):
                 n_points = int(line.split(":")[1].strip())
+            elif line.startswith("Flags:") and "complex" in line:
+                is_complex = True
             elif line.strip() == "Variables:":
-                # 读接下来 n_vars 行
                 for j in range(n_vars):
                     parts = lines[i + 1 + j].split()
                     if len(parts) >= 2:
@@ -292,14 +295,19 @@ class LTspiceBackend:
         if data_start is None or not var_names:
             return {}
 
-        # 解析数据
-        # LTspice ASCII .raw 格式: 每行一个值
-        #   0  vals[0]
-        #      vals[1]
-        #      vals[2]
-        #      ... vals[n_vars-1]
-        #   1  vals[0]
-        #      ...
+        def _parse_value(tok: str) -> float:
+            """Parse a real or 're,im' complex value; return magnitude."""
+            if "," in tok:
+                try:
+                    re, im = tok.split(",", 1)
+                    return float((float(re) ** 2 + float(im) ** 2) ** 0.5)
+                except ValueError:
+                    return float("nan")
+            try:
+                return float(tok)
+            except ValueError:
+                return float("nan")
+
         result = {name: {"ivar": [], "dvar": []} for name in var_names[1:]}
         result["time"] = {"ivar": [], "dvar": []}  # 兼容旧调用
 
@@ -316,9 +324,7 @@ class LTspiceBackend:
                 idx = int(parts[0])
                 # 提交上一个数据点
                 if cur_vals and idx == cur_idx + 1:
-                    # cur_vals 长度应等于 n_vars，可能少于（不完整）
                     if len(cur_vals) == n_vars:
-                        # 第一个 var 是 ivar
                         ivar_val = cur_vals[0]
                         for v_idx, vname in enumerate(var_names[1:], start=1):
                             if v_idx < len(cur_vals):
@@ -327,20 +333,13 @@ class LTspiceBackend:
                             result[n]["ivar"].append(ivar_val)
                 cur_idx = idx
                 cur_vals = []
-                # 这一行也可能包含第一个值
                 if len(parts) > 1:
                     for p in parts[1:]:
-                        try:
-                            cur_vals.append(float(p))
-                        except ValueError:
-                            pass
+                        cur_vals.append(_parse_value(p))
             except ValueError:
                 # 不是 index 行，是数据行
                 for p in parts:
-                    try:
-                        cur_vals.append(float(p))
-                    except ValueError:
-                        pass
+                    cur_vals.append(_parse_value(p))
 
         # 处理最后一个数据点
         if cur_vals and len(cur_vals) == n_vars:
@@ -350,6 +349,11 @@ class LTspiceBackend:
                     result[vname]["dvar"].append(cur_vals[v_idx])
             for n in result:
                 result[n]["ivar"].append(ivar_val)
+
+        # Convert lists to numpy arrays for downstream math
+        for k, v in result.items():
+            v["ivar"] = np.array(v["ivar"], dtype=float)
+            v["dvar"] = np.array(v["dvar"], dtype=float)
 
         return result
 
@@ -415,29 +419,30 @@ def gen_cv_netlist(model_path: str,
                    freq: float = 1e6,
                    model_name: str = "nmos1",
                    use_subckt: bool = True) -> str:
-    """生成 C-V 扫描的 netlist (AC 分析)
+    """生成 C-V 扫描的 netlist (Iac + .step Vds + single-freq AC 分析)
 
-    Vgs = 0 (off-state) is fixed and Vds is a 0-V DC source — the simulator
-    subsequently runs AC small-signal to extract I(Vgs) and derive Ciss.
-
-    Known limitation: this netlist is known to fail under LTspice XVII on
-    the SDH10N2P1WC-AA exported .lib (AC run produces no .raw file even
-    after extensive debugging).  eval_cv returns None on failure so the
-    report shows "fit unavailable" instead of a misleading 1e-12 placeholder.
-    TODO: rewrite with explicit Vgs AC source and parametric .step on Vds.
+    Iac 1A AC at gate (high-Z 电流源) so it does not conflict with the
+    Vgs DC source.  `.step param Vds 0 vds_max vds_step` sweeps the
+    DC operating point.  `.ac dec 1 f f` runs AC analysis at a single
+    frequency f (1MHz by default) so the output is a clean (nVds, nVars)
+    matrix.  `.print ac V(G) I(Iac)` gives complex voltage on the gate
+    node and the injected AC current; eval_cv computes C = |I| / (omega|V|)
+    at each Vds.
     """
     abs_path = Path(model_path).resolve()
     if use_subckt:
         x_line = f"X1 D G 0 {model_name}"
     else:
         x_line = f"M1 D G 0 0 {model_name}"
-    return f"""* C-V scan, freq={freq}Hz
+    return f"""* C-V scan via Iac + 1GΩ DC-bias + Vac bias on D, freq={freq:g}Hz
 .include "{abs_path}"
 {x_line}
-Vds D 0 0
-Vgs G 0 0
-.ac dec 10 1k 10Meg
-.print ac I(Vgs)
+Rgs_pull G 0 1G
+Iac G 0 DC 0 AC 1 sin(0 1 {freq:g})
+Vac D 0 DC 1 AC 1 sin(0 1 {freq:g})
+.step param Vds 1 {vds_max} {vds_step}
+.ac list {freq:g}
+.print ac V(G) I(Iac)
 .end
 """
 

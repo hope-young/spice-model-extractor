@@ -198,12 +198,14 @@ class LTspiceEvaluator:
         LTspice netlist is tracked separately.
         """
         import time
+        import sys
         key = self._param_hash(model, f"cv_f{freq}", vds_arr)
         if key in self.cache:
             self.stats["cache_hits"] += 1
             if self.cache[key] is None:
-                return None
-            return self.cache[key]
+                del self.cache[key]   # invalidate stale None cache entry
+            else:
+                return self.cache[key]
 
         t0 = time.time()
         self.stats["calls"] += 1
@@ -219,24 +221,26 @@ class LTspiceEvaluator:
 
         try:
             raw = self.backend.parse_raw(res.raw_path)
-            # AC: freq 是 ivar, I(Vgs) 是 dvar
-            # Ciss = |I(Vgs)| / (2π × freq × Vgs_ac)
-            if 'I(Vgs)' not in raw:
+            if 'V(g)' not in raw or 'I(Iac)' not in raw:
                 self.cache[key] = None
                 return None
-            fit_id = np.abs(np.array(raw['I(Vgs)']['dvar']))
-            fit_freq = np.array(raw['I(Vgs)']['ivar']) if raw['I(Vgs)']['ivar'] else None
-            if fit_freq is None or len(fit_freq) == 0:
+            v_g = np.asarray(raw['V(g)']['dvar'], dtype=float)   # magnitudes
+            i_iac = np.asarray(raw['I(Iac)']['dvar'], dtype=float)  # magnitudes
+            if v_g.size == 0 or i_iac.size == 0:
                 self.cache[key] = None
                 return None
-            idx_at_freq = np.argmin(np.abs(fit_freq - freq))
-            ciss_at_vds = fit_id[idx_at_freq::len(fit_freq)]  # 每 Vds 一组
-            if len(ciss_at_vds) >= len(vds_arr):
-                out = ciss_at_vds[:len(vds_arr)] / (2 * np.pi * freq)
-            else:
-                out = np.interp(vds_arr, np.linspace(0, vds_max, len(ciss_at_vds)),
-                                 ciss_at_vds / (2 * np.pi * freq))
-            return out
+            # C = |I| / (omega * |V|).  Iac amplitude is 1 A so i_iac
+            # should be 1.0 (the cap current) and v_g is the small-signal
+            # voltage on the gate node.  Length = nVds_step.
+            omega = 2 * np.pi * freq
+            c = i_iac / (omega * np.maximum(v_g, 1e-30))
+            if len(c) >= len(vds_arr):
+                return c[: len(vds_arr)]
+            # Pad / interpolate to vds_arr length when fewer points
+            # were returned than requested.
+            x_axis = np.linspace(vds_arr[0], vds_arr[-1], len(c)) \
+                if vds_arr.size else np.linspace(0, vds_max, len(c))
+            return np.interp(vds_arr, x_axis, c)
         except Exception as e:
             if self.verbose:
                 print(f"[eval_cv] parse error: {e}")
