@@ -193,7 +193,11 @@ class Stage:
         # 平滑过渡 (sigmoid 在 Vth 附近)
         alpha = 1.0 / (1.0 + np.exp(-(vgs - vth) / 0.05))
         i_d = i_sub * (1 - alpha) + i_strong * alpha
-        return np.maximum(i_d, 1e-15)
+        # Floor set well below the sub-threshold measurement range (~1e-9 A)
+        # so model predictions follow natural exp() decay.  The previous
+        # 1e-15 floor caused 6-decade residuals vs measured sub-threshold
+        # data, which masked as RMS=0.17 but blew R² to 0.
+        return np.maximum(i_d, 1e-30)
 
     def _eval_idvd_simple(self, sd: SimData) -> np.ndarray:
         """简化 Id-Vd 评估（含 mobility degradation）"""
@@ -252,7 +256,10 @@ class Stage:
         n = self.model.get("N")
         vt = 0.0259
         i_d = is_ * (np.exp(vsd / (n * vt)) - 1)
-        return np.maximum(i_d, 1e-15)
+        # Diode curve is in absolute-A units; keep the floor very low
+        # so the residual on near-zero measurements (Vsd ~ 0) doesn't
+        # get artificially inflated by an arbitrary clamp.
+        return np.maximum(i_d, 1e-30)
 
     def run(self, optimizer: Optimizer) -> StageResult:
         """运行拟合"""

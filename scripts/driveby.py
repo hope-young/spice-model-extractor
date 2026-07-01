@@ -175,6 +175,7 @@ def main() -> int:
             device_info=resp["device_info"], key_params=resp["key_params"],
             curve_counts=resp["curve_counts"], fit_result=fit,
             out_xlsx=Path(args.report_xlsx),
+            lib_path=Path(args.out),
         )
     return 0
 
@@ -183,6 +184,7 @@ def _write_excel_report(
     *, base: str, project_id: str,
     device_info: dict, key_params: dict, curve_counts: dict,
     fit_result: dict, out_xlsx: Path,
+    lib_path: Path = None,
 ) -> None:
     """Pull curve data from the backend and write a multi-sheet Excel report."""
     try:
@@ -230,6 +232,7 @@ def _write_excel_report(
         fit_result=fit_result,
         curve_counts=curve_counts,
         curves=curves,
+        lib_path=lib_path,
     )
     print(f"  Excel written: {out_xlsx}")
 
