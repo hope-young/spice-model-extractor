@@ -415,7 +415,17 @@ def gen_cv_netlist(model_path: str,
                    freq: float = 1e6,
                    model_name: str = "nmos1",
                    use_subckt: bool = True) -> str:
-    """生成 C-V 扫描的 netlist (AC 分析)"""
+    """生成 C-V 扫描的 netlist (AC 分析)
+
+    Vgs = 0 (off-state) is fixed and Vds is a 0-V DC source — the simulator
+    subsequently runs AC small-signal to extract I(Vgs) and derive Ciss.
+
+    Known limitation: this netlist is known to fail under LTspice XVII on
+    the SDH10N2P1WC-AA exported .lib (AC run produces no .raw file even
+    after extensive debugging).  eval_cv returns None on failure so the
+    report shows "fit unavailable" instead of a misleading 1e-12 placeholder.
+    TODO: rewrite with explicit Vgs AC source and parametric .step on Vds.
+    """
     abs_path = Path(model_path).resolve()
     if use_subckt:
         x_line = f"X1 D G 0 {model_name}"
@@ -427,7 +437,7 @@ def gen_cv_netlist(model_path: str,
 Vds D 0 0
 Vgs G 0 0
 .ac dec 10 1k 10Meg
-.print ac I(Vds) I(Vgs)
+.print ac I(Vgs)
 .end
 """
 

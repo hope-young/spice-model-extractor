@@ -189,12 +189,20 @@ class LTspiceEvaluator:
                 model: BSIM3Model,
                 vds_arr: np.ndarray,
                 freq: float = 1e6,
-                vds_max: float = 25.0) -> np.ndarray:
-        """评估 C-V 曲线 (返回 Ciss in F)"""
+                vds_max: float = 25.0) -> Optional[np.ndarray]:
+        """评估 C-V 曲线 (返回 Ciss in F; None on LTspice failure).
+
+        The 1e-12 fallback was previously feeding nonsense data into the
+        fit loop and the Excel report. We now cache None so callers see a
+        honest "fit unavailable" instead.  The fix for the underlying
+        LTspice netlist is tracked separately.
+        """
         import time
         key = self._param_hash(model, f"cv_f{freq}", vds_arr)
         if key in self.cache:
             self.stats["cache_hits"] += 1
+            if self.cache[key] is None:
+                return None
             return self.cache[key]
 
         t0 = time.time()
@@ -206,31 +214,29 @@ class LTspiceEvaluator:
         self.stats["time"] += time.time() - t0
 
         if not res.success or not res.raw_path or not res.raw_path.exists():
-            out = np.full_like(vds_arr, 1e-12, dtype=float)
-            self.cache[key] = out
-            return out
+            self.cache[key] = None
+            return None
 
         try:
             raw = self.backend.parse_raw(res.raw_path)
             # AC: freq 是 ivar, I(Vgs) 是 dvar
             # Ciss = |I(Vgs)| / (2π × freq × Vgs_ac)
-            # 简化: Ciss ∝ |I(Vgs)| / freq (Vgs_ac=1V implicit)
             if 'I(Vgs)' not in raw:
-                out = np.full_like(vds_arr, 1e-12, dtype=float)
+                self.cache[key] = None
+                return None
+            fit_id = np.abs(np.array(raw['I(Vgs)']['dvar']))
+            fit_freq = np.array(raw['I(Vgs)']['ivar']) if raw['I(Vgs)']['ivar'] else None
+            if fit_freq is None or len(fit_freq) == 0:
+                self.cache[key] = None
+                return None
+            idx_at_freq = np.argmin(np.abs(fit_freq - freq))
+            ciss_at_vds = fit_id[idx_at_freq::len(fit_freq)]  # 每 Vds 一组
+            if len(ciss_at_vds) >= len(vds_arr):
+                out = ciss_at_vds[:len(vds_arr)] / (2 * np.pi * freq)
             else:
-                # AC sweep: 取 freq 处的 I(Vgs)
-                fit_id = np.abs(np.array(raw['I(Vgs)']['dvar']))
-                fit_freq = np.array(raw['I(Vgs)']['ivar']) if raw['I(Vgs)']['ivar'] else None
-                if fit_freq is not None and len(fit_freq) > 0:
-                    idx_at_freq = np.argmin(np.abs(fit_freq - freq))
-                    ciss_at_vds = fit_id[idx_at_freq::len(fit_freq)]  # 每 Vds 一组
-                    if len(ciss_at_vds) >= len(vds_arr):
-                        out = ciss_at_vds[:len(vds_arr)] / (2 * np.pi * freq)
-                    else:
-                        out = np.interp(vds_arr, np.linspace(0, vds_max, len(ciss_at_vds)),
-                                         ciss_at_vds / (2 * np.pi * freq), left=1e-12, right=1e-12)
-                else:
-                    out = np.full_like(vds_arr, 1e-12, dtype=float)
+                out = np.interp(vds_arr, np.linspace(0, vds_max, len(ciss_at_vds)),
+                                 ciss_at_vds / (2 * np.pi * freq))
+            return out
         except Exception as e:
             if self.verbose:
                 print(f"[eval_cv] parse error: {e}")

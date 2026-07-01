@@ -28,16 +28,15 @@ def _populate_fit_cache(project, engine) -> None:
     and surface the fit arrays back onto the project so subsequent
     GET /api/projects/{id}/curves/{type} calls can include "fit".
 
-    Keyed by the same names used by get_curve():
-        idvg_5v, idvg_05v, idvd, cv_vds_ciss, cv_vds_coss,
-        cv_vds_crss, body_diode
+    Keys are typed strings or tuples (type, vgs) so that GET /curves/idvd
+    with ?vgs_v=10 doesn't accidentally pick up the fit from the Vgs=6
+    sweep (which used to produce a length mismatch and "n/a" cells).
     """
-    cache: dict[str, list] = {}
+    cache: dict[Any, list] = {}
 
     for stage in engine.stages:
         for sd in stage.simdata:
             ct = sd.curve_type  # IdVg / IdVd / CvVds / IsVsd / Qg
-            iv = sd.metadata.get("vds_v") or sd.metadata.get("vgs_v")
             T = sd.metadata.get("temperature_c", 25)
             fit_list = sd.fit.tolist() if sd.fit is not None else None
             if ct == "IdVg":
@@ -49,7 +48,13 @@ def _populate_fit_cache(project, engine) -> None:
                 else:
                     continue
             elif ct == "IdVd":
-                key = "idvd"
+                # Id-Vd curves span multiple Vgs levels; key by Vgs so
+                # the GET route can pick the matching fit when the caller
+                # asks for a specific Vgs level.
+                vgs = sd.metadata.get("vgs_v")
+                if vgs is None:
+                    continue
+                key = ("idvd", f"vgs_{float(vgs):.2f}")
             elif ct == "CvVds":
                 cap = sd.metadata.get("cap_type")  # 'ciss' / 'coss' / 'crss'
                 if cap == "ciss":
@@ -445,15 +450,24 @@ def get_curve(project_id: str, curve_type: str, vgs_v: Optional[float] = None):
         raise HTTPException(400, f"Curve error: {e}")
 
     # The freshly built SimData has no .fit (we didn't run the optimizer
-    # on it); fit values live in project.cached_fits[curve_type] populated
-    # by _populate_fit_cache() at the end of _run_fit_sync.  We pick the
-    # first non-None entry; reporting tools can re-aggregate as needed.
+    # on it); fit values live in project.cached_fits[...] populated
+    # by _populate_fit_cache() at the end of _run_fit_sync.  For IdVd
+    # curves the cache is keyed by (type, vgs) so we can pick the right
+    # fit when the caller asks for a specific Vgs level; other curve
+    # types fall through to the string key.
     cached = getattr(project, "cached_fits", None) or {}
     fit_list: list | None = None
-    for entry in cached.get(curve_type, []):
-        if entry is not None:
-            fit_list = entry
-            break
+    if curve_type == "idvd":
+        v = vgs_v if vgs_v is not None else 10.0
+        for entry in cached.get(("idvd", f"vgs_{v:.2f}"), []):
+            if entry is not None:
+                fit_list = entry
+                break
+    else:
+        for entry in cached.get(curve_type, []):
+            if entry is not None:
+                fit_list = entry
+                break
 
     return CurveResponse(
         name=sim.name,
@@ -466,7 +480,7 @@ def get_curve(project_id: str, curve_type: str, vgs_v: Optional[float] = None):
         metadata={
             k: (v if isinstance(v, (int, float, str, bool, list)) else str(v))
             for k, v in sim.metadata.items()
-        } | {"has_fit": fit_list is not None},
+        } | {"has_fit": fit_list is not None, "vgs_v": vgs_v},
     )
 
 

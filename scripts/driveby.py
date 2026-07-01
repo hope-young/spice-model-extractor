@@ -210,18 +210,27 @@ def _write_excel_report(
     curves: dict = {}
     for local_key, route_key in curve_specs:
         try:
-            payload = {"curve_type": route_key}
-            # body_diode / idvd sometimes need vgs_v; not required here
-            r = http_request("GET", f"{base}/api/projects/{project_id}/curves/{route_key}")
+            # IdVd curves have multiple Vgs levels; pin to Vgs=10V for
+            # the report so the cached fit matches the sim.iv that
+            # the route returns.
+            extra_qs = "?vgs_v=10" if route_key == "idvd" else ""
+            r = http_request("GET", f"{base}/api/projects/{project_id}/curves/{route_key}{extra_qs}")
             curves[local_key] = {
                 "ivar": r["data"].get("ivar", []) or [],
                 "dvar": r["data"].get("dvar", []) or [],
                 "fit":  r["data"].get("fit"),
             }
             n = len(curves[local_key]["ivar"])
-            print(f"  {local_key}: {n} points"
-                  + (f" (fit present)" if curves[local_key]["fit"] is not None
-                     else f" (no fit — run fit first)"))
+            n_fit = sum(1 for v in curves[local_key]["fit"] if v is not None) \
+                    if curves[local_key]["fit"] is not None else 0
+            msg = f" {n} points"
+            if curves[local_key]["fit"] is None:
+                msg += " (no fit — run fit first)"
+            elif n_fit < n:
+                msg += f" (fit covers {n_fit}/{n} points)"
+            else:
+                msg += " (fit present)"
+            print(f"  {local_key}: {msg}")
         except urllib.error.HTTPError as e:
             print(f"  {local_key}: HTTP {e.code} (skipping)", file=sys.stderr)
 
