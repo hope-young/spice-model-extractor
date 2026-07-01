@@ -221,7 +221,12 @@ class Stage:
         # 线性区
         rdson = max(self.model.get("RD") + self.model.get("RS"), 1e-6)
         vds_clip = np.minimum(vds, vov)
-        i_lin = vov * vds_clip / rdson
+        # Linear-region current is Vds / R_dson, NOT Vov * Vds / R_dson.
+        # The original formula had an extra `vov` factor that was a
+        # mis-typed "ohmic" model; it produced I_lin ~ 200 A for Vds=30mV
+        # and Vov=6.4, far above the real ~30 A from a 1.8 mΩ Rdson.
+        # Id,linear = Vds / R_dson (BSIM3 ohmic-region formulation)
+        i_lin = vds_clip / rdson
         i_d = np.where(vds < vov, i_lin, i_sat)
         # 沟道长度调制
         pclm = self.model.get("PCLM")
